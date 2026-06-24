@@ -10,14 +10,17 @@ void        mac_table_init(MacTable *table) {
     table->count = 0;
 }
 
-MacEntry   *mac_table_learn(MacTable *table, const uint8_t mac[6], Interface *port, uint64_t now) {
+MacEntry   *mac_table_learn(MacTable *table, 
+                            const uint8_t mac[6], 
+                            Interface *port, 
+                            uint64_t now) {
     if (!table || !mac ||!port) {
         return NULL;
     }
 
     for (int i = 0; i < MAC_TABLE_SIZE; i++) {
         if (table->entries[i].valid && memcmp(table->entries[i].mac, mac, 6) == 0) {
-            table->entries[i].port = port;
+            table->entries[i].port      = port;
             table->entries[i].timestamp = now;
             return &table->entries[i];
         }
@@ -26,9 +29,9 @@ MacEntry   *mac_table_learn(MacTable *table, const uint8_t mac[6], Interface *po
     for (int i = 0; i < MAC_TABLE_SIZE; i++) {
         if (!table->entries[i].valid) {
             memcpy(table->entries[i].mac, mac, 6);
-            table->entries[i].port = port;
+            table->entries[i].port      = port;
             table->entries[i].timestamp = now;
-            table->entries[i].valid = 1;
+            table->entries[i].valid     = 1;
             table->count++;
             return &table->entries[i];
         }

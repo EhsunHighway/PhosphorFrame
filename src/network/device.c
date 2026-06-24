@@ -15,13 +15,13 @@ Device     *device_create(const char *name, int iface_max) {
 
     strncpy(dev->name, name, sizeof(dev->name) - 1);
     dev->name[sizeof(dev->name) - 1] = '\0'; // ensure null-termination
-    dev->interfaces = malloc(sizeof(Interface *) * iface_max);
+    dev->interfaces                  = malloc(sizeof(Interface *) * iface_max);
     if (!dev->interfaces) {
         free(dev);
         return NULL;
     }
     dev->iface_count = 0;
-    dev->iface_max = iface_max;
+    dev->iface_max   = iface_max;
     return dev;
 }
 
@@ -53,7 +53,7 @@ int         device_add_interface(Device *dev, Interface *iface) {
         }
     }
 
-    iface->device = dev;
+    iface->device                       = dev;
     dev->interfaces[dev->iface_count++] = iface;
     return 0;
 }

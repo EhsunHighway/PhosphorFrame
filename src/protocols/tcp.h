@@ -63,7 +63,7 @@ typedef struct TcpSegment {
 
 typedef struct TcbSendQueue {
     TcpSegment entries[TCP_MAX_INFLIGHT];
-    int count;
+    int        count;
 } TcbSendQueue;
 
 struct Tcb {

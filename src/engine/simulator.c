@@ -12,8 +12,8 @@ Simulator *simulator_create(Topology *topo, Scheduler *sched) {
         return NULL;
     }
 
-    sim->topo = topo;
-    sim->sched = sched;
+    sim->topo     = topo;
+    sim->sched    = sched;
     sim->end_time = 0;
     
     return sim;
@@ -81,12 +81,21 @@ uint64_t   simulator_now(const Simulator *sim) {
 }
 
 
-int        simulator_inject_packet(Simulator *sim, Device *src, Device *dst, Packet *pkt, uint64_t delay_us) {
+int        simulator_inject_packet(Simulator *sim, 
+                                   Device *src, 
+                                   Device *dst, 
+                                   Packet *pkt, 
+                                   uint64_t delay_us) {
     if (!sim || !src || !dst || !pkt) {
         return -1;
     }
 
-    Event *e = event_create(EVT_PACKET_SEND, sim->sched->now + delay_us, src, dst, pkt, NULL);
+    Event *e = event_create(EVT_PACKET_SEND, 
+                            sim->sched->now + delay_us, 
+                            src, 
+                            dst, 
+                            pkt, 
+                            NULL);
     if (!e) {
         return -1;
     }

@@ -1162,6 +1162,16 @@ FIN consumes one sequence number and must be acknowledged. The same incoming
 segment may also carry an ACK for our previously sent FIN, so each close state
 must handle ACK and FIN in a clear order.
 
+The receive switch should be organized by TCP state. Use these state sections
+as the mental map for the code:
+
+- `TCP_ESTABLISHED`: process peer data and peer FIN.
+- `TCP_FIN_WAIT_1`: process ACK of our FIN, peer FIN, or both.
+- `TCP_FIN_WAIT_2`: process peer FIN after our FIN was acknowledged.
+- `TCP_CLOSING`: process ACK of our FIN after both sides already sent FIN.
+- `TCP_LAST_ACK`: process ACK of our FIN after passive close.
+- `TCP_TIME_WAIT`: consume late duplicate segments.
+
 When a branch below says “ACK covers our FIN,” it means the incoming segment
 has `ACK` set and its `ack` value is greater than or equal to the `seq_end` of
 the queued FIN segment. In this module, call `tcp_sendq_ack(tcb, ack)` to clear
@@ -1201,7 +1211,11 @@ application has not called `tcp_close` yet. When the application later calls
 #### FIN_WAIT_1 Receives ACK Or FIN
 
 `TCP_FIN_WAIT_1` means local TCP already sent FIN and is waiting for the peer to
-ACK that FIN.
+ACK that FIN. The peer may also send its own FIN while we are still waiting for
+that ACK, so this state has to reason about two separate facts:
+
+- did this segment ACK our FIN?
+- did this segment contain an acceptable peer FIN?
 
 In this branch, an acceptable peer FIN means:
 

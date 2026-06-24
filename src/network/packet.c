@@ -18,10 +18,10 @@ Packet *packet_create(size_t capacity) {
         return NULL;
     }
 
-    p->data     = p->head + PKT_HEADROOM;   // payload starts after headroom
-    p->len      = 0;
-    p->capacity = capacity;
-    p->layer    = 0;
+    p->data                 = p->head + PKT_HEADROOM;   // payload starts after headroom
+    p->len                  = 0;
+    p->capacity             = capacity;
+    p->layer                = 0;
     static uint32_t next_id = 1;
     p->id = next_id++;
 

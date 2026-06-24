@@ -29,8 +29,20 @@ Event      *event_create_callback(EventType     type,
     return e;
 }
 
-Event      *event_create(EventType type, uint64_t timestamp, void *src, void *dst, void *packet, void *data) {
-    return event_create_callback(type, timestamp, src, dst, packet, data, NULL, NULL);
+Event      *event_create(EventType type, 
+                         uint64_t timestamp, 
+                         void *src, 
+                         void *dst, 
+                         void *packet, 
+                         void *data) {
+    return event_create_callback(type, 
+                                 timestamp, 
+                                 src, 
+                                 dst, 
+                                 packet, 
+                                 data, 
+                                 NULL, 
+                                 NULL);
 }
 
 

@@ -55,7 +55,10 @@ void        mac_table_init(MacTable *table);
     complete behaviors; 
     disjoint behaviors;
 */
-MacEntry   *mac_table_learn(MacTable *table, const uint8_t mac[6], Interface *port, uint64_t now);
+MacEntry   *mac_table_learn(MacTable *table, 
+                            const uint8_t mac[6], 
+                            Interface *port, 
+                            uint64_t now);
 
 /*@ 
     behavior null:

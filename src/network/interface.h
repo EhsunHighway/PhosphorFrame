@@ -77,7 +77,11 @@ typedef struct Interface {
          \result->last_tx_time == 0 &&
          \result->last_error_time == 0);
 */
-Interface     *interface_create(const char *name, const uint8_t mac[6], uint32_t ip_addr, uint8_t prefix_len, uint16_t mtu);
+Interface     *interface_create(const char *name, 
+                                const uint8_t mac[6], 
+                                uint32_t ip_addr, 
+                                uint8_t prefix_len, 
+                                uint16_t mtu);
 
 /*@ 
     requires iface == \null || \valid(iface);

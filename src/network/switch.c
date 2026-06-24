@@ -52,10 +52,10 @@ Switch    *switch_create(const char *name, Simulator *sim) {
         return NULL;
     }
     
-    sw->base = *dev;
+    sw->base       = *dev;
     free(dev);
     sw->port_count = 0;
-    sw->sim = sim;
+    sw->sim        = sim;
     mac_table_init(&sw->mac_tbl);
     Event *age_event = event_create_callback(EVT_MAC_AGE,
                                              sim->sched->now + SW_AGE_INTERVAL,

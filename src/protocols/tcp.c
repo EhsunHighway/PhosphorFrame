@@ -218,7 +218,14 @@ static void tcp_schedule_retransmit(Simulator *sim,
     uint64_t now = scheduler_now(sim->sched) + TCP_RETRANSMIT_US;
 
     if (tcp_ctx) {
-        Event *e = event_create_callback(EVT_TCP_RETRANSMIT, now, NULL, NULL, NULL, tcb, tcp_retransmit_handler, tcp_ctx);
+        Event *e = event_create_callback(EVT_TCP_RETRANSMIT, 
+                                         now, 
+                                         NULL, 
+                                         NULL, 
+                                         NULL, 
+                                         tcb, 
+                                         tcp_retransmit_handler, 
+                                         tcp_ctx);
         if (!e) {
             return;
         }
@@ -363,9 +370,9 @@ Tcb  *tcp_connect(Simulator        *sim,
 
     uint64_t now = sim->sched ? scheduler_now(sim->sched) : 0;
     if (tcp_sendq_track(tcb, syn_clone, 0, 1, TCP_FLAG_SYN, now) == -1) {
-            packet_free(syn_clone);
-            tcp_release_tcb(table, tcb);
-            return NULL;
+        packet_free(syn_clone);
+        tcp_release_tcb(table, tcb);
+        return NULL;
     }
 
     if (sim->sched) {
@@ -449,7 +456,7 @@ int  tcp_receive(Interface *iface, Packet *pkt, void *ctx) {
     }
     size_t payload_len = pkt->len - TCP_HDR_LEN;
     
-    Tcb *tcb    = tcp_find_exact(tcp_ctx->table, dst_ip, dst_port, src_ip, src_port);
+    Tcb *tcb      = tcp_find_exact(tcp_ctx->table, dst_ip, dst_port, src_ip, src_port);
     Tcb *listener = NULL;
     if (!tcb && flags == TCP_FLAG_SYN) {
         /*
@@ -483,9 +490,9 @@ int  tcp_receive(Interface *iface, Packet *pkt, void *ctx) {
         child->connect_handler = listener->connect_handler;
         child->handler_ctx     = listener->handler_ctx;
         
-        Simulator *sim = tcp_ctx->sim;
-        Packet *syn_ack_clone = NULL;
-        uint64_t now = sim->sched ? scheduler_now(sim->sched) : 0;
+        Simulator *sim           = tcp_ctx->sim;
+        Packet    *syn_ack_clone = NULL;
+        uint64_t   now           = sim->sched ? scheduler_now(sim->sched) : 0;
         if (tcp_send_segment(sim, 
                              child->local_ip, 
                              child->remote_ip, 
@@ -503,7 +510,12 @@ int  tcp_receive(Interface *iface, Packet *pkt, void *ctx) {
             return -1;
         }
 
-        if (tcp_sendq_track(child, syn_ack_clone, 0, 1, TCP_FLAG_SYN | TCP_FLAG_ACK, now) == -1) {
+        if ((tcp_sendq_track(child, 
+                             syn_ack_clone, 
+                             0, 
+                             1, 
+                             TCP_FLAG_SYN | TCP_FLAG_ACK, 
+                             now)) == -1) {
             packet_free(syn_ack_clone);
             tcp_release_tcb(tcp_ctx->table, child);
             packet_free(pkt);
@@ -514,291 +526,234 @@ int  tcp_receive(Interface *iface, Packet *pkt, void *ctx) {
         return 0;
     }
 
-    /*
-     * SYN_SENT Receives SYN-ACK
-     */
-    if (tcb && tcb->state == TCP_SYN_SENT && 
-       (flags & TCP_FLAG_SYN)             && 
-       (flags & TCP_FLAG_ACK)             && 
-        ack_num == tcb->snd_nxt) {
-        tcb->rcv_nxt = seq_num + 1;
-        tcb->snd_una = ack_num;
-        tcp_sendq_ack(tcb, ack_num);
-        tcb->state  = TCP_ESTABLISHED;
-        int res = tcp_send_segment(tcp_ctx->sim, 
-                                   tcb->local_ip, 
-                                   tcb->remote_ip, 
-                                   tcb->local_port, 
-                                   tcb->remote_port, 
-                                   tcb->snd_nxt, 
-                                   tcb->rcv_nxt, 
-                                   TCP_FLAG_ACK, 
-                                   NULL, 
-                                   0, 
-                                   NULL);
-        if (res == -1) {
-            packet_free(pkt);
-            iface->rx_errors++;
-            return -1;
-        }
-
-        if (tcb->connect_handler) {
-            tcb->connect_handler(tcb, tcb->handler_ctx);
-        }
-
-        packet_free(pkt);
-        return 0;
-    }
-
-    /*
-     * SYN_RECEIVED Receives Final ACK
-     */
-    if (tcb && tcb->state == TCP_SYN_RECEIVED && 
-       (flags & TCP_FLAG_ACK)                 && 
-        ack_num == tcb->snd_nxt) {
-        tcb->snd_una = ack_num;
-        tcp_sendq_ack(tcb, ack_num);
-        tcb->state = TCP_ESTABLISHED;
-        if (tcb->connect_handler) {
-            tcb->connect_handler(tcb, tcb->handler_ctx);
-        }
-        packet_free(pkt);
-        return 0;
-    }
-
-    /*
-     * ESTABLISHED Receives ACK Or Data
-     */
-    if (tcb && tcb->state == TCP_ESTABLISHED) {
-        /*        
-         * 1. Update send queue based on ACK field
-         */
-        if (flags & TCP_FLAG_ACK) {
-            if (ack_num > tcb->snd_una && ack_num <= tcb->snd_nxt) {
-                tcp_sendq_ack(tcb, ack_num);
-                tcb->snd_una = ack_num;
-            }
-        }
-        /*
-         * 2. Update receive queue based on payload
-         */
-        if (payload_len > 0) {
-            if (seq_num == tcb->rcv_nxt) {
-                tcb->rcv_nxt += payload_len;
-                int res = tcp_send_segment(tcp_ctx->sim, 
-                                           tcb->local_ip, 
-                                           tcb->remote_ip, 
-                                           tcb->local_port, 
-                                           tcb->remote_port, 
-                                           tcb->snd_nxt, 
-                                           tcb->rcv_nxt, 
-                                           TCP_FLAG_ACK, 
-                                           NULL, 
-                                           0, 
-                                           NULL);
-                if (res == -1) {
-                    packet_free(pkt);
-                    iface->rx_errors++;
-                    return -1;
-                }
-
-                if (packet_strip(pkt, TCP_HDR_LEN) == -1) {
-                    packet_free(pkt);
-                    iface->rx_errors++;
-                    return -1;
-                }
-
-                pkt->layer = 5;
-
-                if (tcb->recv_handler) {
-                    tcb->recv_handler(tcb, pkt, tcb->handler_ctx);
-                    return 0;
-                } else {
-                    packet_free(pkt);
-                    return 0;
-                }
-            } else {
-                int res = tcp_send_segment(tcp_ctx->sim, 
-                                           tcb->local_ip, 
-                                           tcb->remote_ip, 
-                                           tcb->local_port, 
-                                           tcb->remote_port, 
-                                           tcb->snd_nxt, 
-                                           tcb->rcv_nxt, 
-                                           TCP_FLAG_ACK, 
-                                           NULL, 
-                                           0, 
-                                           NULL);
-                if (res == -1) {
-                    packet_free(pkt);
-                    iface->rx_errors++;
-                    return -1;
-                }
-                packet_free(pkt);
-                return 0;
-            }
-        }
-        /*
-         * 3. Handle FIN
-         */
-        if (payload_len == 0) {
-            if(!(flags & TCP_FLAG_FIN)) {
-                packet_free(pkt);
-                return 0;
-            }
-        }
-    }
-
-    /*
-     * Receives FIN
-     */
-    if (tcb && (flags & TCP_FLAG_FIN) && seq_num == tcb->rcv_nxt) {
-        tcb->rcv_nxt += 1;
-        int res = tcp_send_segment(tcp_ctx->sim, 
-                                   tcb->local_ip, 
-                                   tcb->remote_ip, 
-                                   tcb->local_port, 
-                                   tcb->remote_port, 
-                                   tcb->snd_nxt, 
-                                   tcb->rcv_nxt, 
-                                   TCP_FLAG_ACK, 
-                                   NULL, 
-                                   0, 
-                                   NULL);
-        if (res == -1) {
-            packet_free(pkt);
-            iface->rx_errors++;
-            return -1;
-        }
-
-        switch (tcb->state) {
-            case TCP_ESTABLISHED:
-                tcb->state = TCP_CLOSE_WAIT;
-                break;
-            case TCP_FIN_WAIT_1:
-                tcb->state = TCP_CLOSING;
-                break;
-            case TCP_FIN_WAIT_2:
-                tcb->state = TCP_TIME_WAIT;    
-                break;
-            default:
-                break;
-        }
-
-        if (tcb->state == TCP_TIME_WAIT) {
-            if (tcp_ctx->sim->sched != NULL) {
-                uint64_t now = scheduler_now(tcp_ctx->sim->sched);
-                Event *e     = event_create_callback(EVT_TIMER_EXPIRED, now + TCP_TIME_WAIT_US, NULL, NULL, NULL, tcb, tcp_time_wait_handler, (TcpTable *)tcp_ctx->table);
-                if (e) {
-                    int res = scheduler_schedule(tcp_ctx->sim->sched, e);
-                    if (res == -1) {
-                        event_free(e);
-                    }
-                }
-            }
-
-            packet_free(pkt);
-            return 0;
-        }
-    }
-    
     if (!tcb) {
         packet_free(pkt);
         iface->rx_dropped++;
         return -1;
     }
-    /*
-     * Closing States Receive ACK
-     */
-    if (tcb->state == TCP_FIN_WAIT_1) { 
-        if ((flags & TCP_FLAG_ACK) && ack_num > tcb->snd_una) {
-            tcb->snd_una = ack_num;
-            tcp_sendq_ack(tcb, ack_num);
-            int fin_still_unacked = 0;
-            for (int i = 0; i < TCP_MAX_INFLIGHT; i++) {
-                TcpSegment *seg = &tcb->sendq.entries[i];
-                if (seg->pkt && (seg->flags & TCP_FLAG_FIN)) {
-                    fin_still_unacked = 1;
-                    break;
+
+    switch (tcb->state)
+    {
+        /*
+         * SYN_SENT Receives SYN-ACK
+         */
+        case TCP_SYN_SENT:
+            if ((flags & TCP_FLAG_SYN)  && 
+                (flags & TCP_FLAG_ACK)  && 
+                ack_num == tcb->snd_nxt) {
+                tcb->rcv_nxt = seq_num + 1;
+                tcb->snd_una = ack_num;
+                tcp_sendq_ack(tcb, ack_num);
+                tcb->state  = TCP_ESTABLISHED;
+                int res = tcp_send_segment(tcp_ctx->sim, 
+                                           tcb->local_ip, 
+                                           tcb->remote_ip, 
+                                           tcb->local_port, 
+                                           tcb->remote_port, 
+                                           tcb->snd_nxt, 
+                                           tcb->rcv_nxt, 
+                                           TCP_FLAG_ACK, 
+                                           NULL, 
+                                           0, 
+                                           NULL);
+                if (res == -1) {
+                    packet_free(pkt);
+                    iface->rx_errors++;
+                    return -1;
+                }
+
+                if (tcb->connect_handler) {
+                    tcb->connect_handler(tcb, tcb->handler_ctx);
+                }
+
+                packet_free(pkt);
+                return 0;
+            }
+            break;
+
+        /*
+         * SYN_RECEIVED Receives Final ACK
+         */
+        case TCP_SYN_RECEIVED:
+            if ((flags & TCP_FLAG_ACK) && 
+                 ack_num == tcb->snd_nxt) {
+                tcb->snd_una = ack_num;
+                tcp_sendq_ack(tcb, ack_num);
+                tcb->state = TCP_ESTABLISHED;
+                if (tcb->connect_handler) {
+                    tcb->connect_handler(tcb, tcb->handler_ctx);
+                }
+                packet_free(pkt);
+                return 0;
+            }
+            break;
+
+        /*
+         * ESTABLISHED Receives ACK Or Data
+         */
+        case TCP_ESTABLISHED:
+            /*        
+             * 1. Update send queue based on ACK field
+             */
+            if (flags & TCP_FLAG_ACK) {
+                if (ack_num > tcb->snd_una && ack_num <= tcb->snd_nxt) {
+                    tcp_sendq_ack(tcb, ack_num);
+                    tcb->snd_una = ack_num;
                 }
             }
-            int fin_is_acked = !fin_still_unacked;
-            
-            if (fin_is_acked) {
-                tcb->state = TCP_FIN_WAIT_2;
-            }
-
-            packet_free(pkt);
-            return 0;
-        }
-    }
-
-    if (tcb->state == TCP_FIN_WAIT_2) { 
-        if ((flags & TCP_FLAG_FIN) && seq_num == tcb->rcv_nxt) {
-            tcb->rcv_nxt = seq_num + 1;
-            int res = tcp_send_segment(tcp_ctx->sim, 
-                                       tcb->local_ip, 
-                                       tcb->remote_ip, 
-                                       tcb->local_port, 
-                                       tcb->remote_port, 
-                                       tcb->snd_nxt, 
-                                       tcb->rcv_nxt, 
-                                       TCP_FLAG_ACK, 
-                                       NULL, 
-                                       0, 
-                                       NULL);
-            if (res == -1) { 
-                packet_free(pkt);
-                iface->rx_errors++;
-                return -1;
-            }
-            tcb->state = TCP_TIME_WAIT;
-            if (tcp_ctx->sim->sched != NULL) {
-                uint64_t now = scheduler_now(tcp_ctx->sim->sched);
-                Event *e     = event_create_callback(EVT_TIMER_EXPIRED, now + TCP_TIME_WAIT_US, NULL, NULL, NULL, tcb, tcp_time_wait_handler, (TcpTable *)tcp_ctx->table);
-                if (e) {
-                    int res = scheduler_schedule(tcp_ctx->sim->sched, e);
+            /*
+             * 2. Update receive queue based on payload
+             */
+            if (payload_len > 0) {
+                if (seq_num == tcb->rcv_nxt) {
+                    tcb->rcv_nxt += payload_len;
+                    int res = tcp_send_segment(tcp_ctx->sim, 
+                                               tcb->local_ip, 
+                                               tcb->remote_ip, 
+                                               tcb->local_port, 
+                                               tcb->remote_port, 
+                                               tcb->snd_nxt, 
+                                               tcb->rcv_nxt, 
+                                               TCP_FLAG_ACK, 
+                                               NULL, 
+                                               0, 
+                                               NULL);
                     if (res == -1) {
-                        event_free(e);
+                        packet_free(pkt);
+                        iface->rx_errors++;
+                        return -1;
+                    }
+
+                    if (packet_strip(pkt, TCP_HDR_LEN) == -1) {
+                        packet_free(pkt);
+                        iface->rx_errors++;
+                        return -1;
+                    }
+
+                    pkt->layer = 5;
+
+                    if (tcb->recv_handler) {
+                        tcb->recv_handler(tcb, pkt, tcb->handler_ctx);
+                        return 0;
+                    } else {
+                        packet_free(pkt);
+                        return 0;
+                    }
+                } else {
+                    int res = tcp_send_segment(tcp_ctx->sim, 
+                                               tcb->local_ip, 
+                                               tcb->remote_ip, 
+                                               tcb->local_port, 
+                                               tcb->remote_port, 
+                                               tcb->snd_nxt, 
+                                               tcb->rcv_nxt, 
+                                               TCP_FLAG_ACK, 
+                                               NULL, 
+                                               0, 
+                                               NULL);
+                    if (res == -1) {
+                        packet_free(pkt);
+                        iface->rx_errors++;
+                        return -1;
+                    }
+                    packet_free(pkt);
+                    return 0;
+                }
+            }
+            /*
+             * 3. Handle FIN
+             */
+            if (payload_len == 0) {
+                if ((flags & TCP_FLAG_FIN) && seq_num == tcb->rcv_nxt) {
+                    tcb->rcv_nxt = seq_num + 1;
+                    int res = tcp_send_segment(tcp_ctx->sim,
+                                               tcb->local_ip,
+                                               tcb->remote_ip,
+                                               tcb->local_port,
+                                               tcb->remote_port,
+                                               tcb->snd_nxt,
+                                               tcb->rcv_nxt,
+                                               TCP_FLAG_ACK,
+                                               NULL,
+                                               0,
+                                               NULL);
+                    if (res == -1) {
+                        packet_free(pkt);
+                        iface->rx_errors++;
+                        return -1;
+                    }
+
+                    tcb->state = TCP_CLOSE_WAIT;
+                    packet_free(pkt);
+                    return 0;
+                }
+
+                if (!(flags & TCP_FLAG_FIN)) {
+                    packet_free(pkt);
+                    return 0;
+                }
+            }
+            break;
+
+        /*
+         * FIN_WAIT_1 Receives ACK
+         */
+        case TCP_FIN_WAIT_1:
+            if ((flags & TCP_FLAG_ACK) && ack_num > tcb->snd_una) {
+                tcb->snd_una = ack_num;
+                tcp_sendq_ack(tcb, ack_num);
+                int fin_still_unacked = 0;
+                for (int i = 0; i < TCP_MAX_INFLIGHT; i++) {
+                    TcpSegment *seg = &tcb->sendq.entries[i];
+                    if (seg->pkt && (seg->flags & TCP_FLAG_FIN)) {
+                        fin_still_unacked = 1;
+                        break;
                     }
                 }
-            }
-
-            packet_free(pkt);
-            return 0;
-        } else {
-            packet_free(pkt);
-            return 0;
-        }   
-    }
-
-    if (tcb->state == TCP_CLOSING) {
-        if (ack_num > tcb->snd_una) {
-            tcb->snd_una = ack_num;
-            tcp_sendq_ack(tcb, ack_num);
-
-            int fin_still_unacked = 0;
-            for (int i = 0; i < TCP_MAX_INFLIGHT; i++) {
-                TcpSegment *seg = &tcb->sendq.entries[i];
-                if (seg->pkt && (seg->flags & TCP_FLAG_FIN)) {
-                    fin_still_unacked = 1;
-                    break;
+                int fin_is_acked = !fin_still_unacked;
+                
+                if (fin_is_acked) {
+                    tcb->state = TCP_FIN_WAIT_2;
                 }
+
+                packet_free(pkt);
+                return 0;
             }
-            int fin_is_acked = !fin_still_unacked;
-            
-            if (fin_is_acked) {            
+            break;
+
+        /*
+         * FIN_WAIT_2 Receives FIN
+         */
+        case TCP_FIN_WAIT_2:
+            if ((flags & TCP_FLAG_FIN) && seq_num == tcb->rcv_nxt) {
+                tcb->rcv_nxt = seq_num + 1;
+                int res = tcp_send_segment(tcp_ctx->sim, 
+                                           tcb->local_ip, 
+                                           tcb->remote_ip, 
+                                           tcb->local_port, 
+                                           tcb->remote_port, 
+                                           tcb->snd_nxt, 
+                                           tcb->rcv_nxt, 
+                                           TCP_FLAG_ACK, 
+                                           NULL, 
+                                           0, 
+                                           NULL);
+                if (res == -1) { 
+                    packet_free(pkt);
+                    iface->rx_errors++;
+                    return -1;
+                }
                 tcb->state = TCP_TIME_WAIT;
                 if (tcp_ctx->sim->sched != NULL) {
                     uint64_t now = scheduler_now(tcp_ctx->sim->sched);
-                    Event *e     = event_create_callback(EVT_TIMER_EXPIRED, 
+                    Event   *e   = event_create_callback(EVT_TIMER_EXPIRED, 
                                                          now + TCP_TIME_WAIT_US, 
                                                          NULL, 
                                                          NULL, 
                                                          NULL, 
                                                          tcb, 
                                                          tcp_time_wait_handler, 
-                                                         (TcpTable *)tcp_ctx->table);
+                                                        (TcpTable *)tcp_ctx->table);
                     if (e) {
                         int res = scheduler_schedule(tcp_ctx->sim->sched, e);
                         if (res == -1) {
@@ -806,41 +761,106 @@ int  tcp_receive(Interface *iface, Packet *pkt, void *ctx) {
                         }
                     }
                 }
+
+                packet_free(pkt);
+                return 0;
+            } else {
+                packet_free(pkt);
+                return 0;
+            }
+            break;
+    
+        /*
+         * CLOSING Receives ACK
+         */
+        case TCP_CLOSING:
+            if (ack_num > tcb->snd_una) {
+                tcb->snd_una = ack_num;
+                tcp_sendq_ack(tcb, ack_num);
+
+                int fin_still_unacked = 0;
+                for (int i = 0; i < TCP_MAX_INFLIGHT; i++) {
+                    TcpSegment *seg = &tcb->sendq.entries[i];
+                    if (seg->pkt && (seg->flags & TCP_FLAG_FIN)) {
+                        fin_still_unacked = 1;
+                        break;
+                    }
+                }
+                int fin_is_acked = !fin_still_unacked;
+                
+                if (fin_is_acked) {            
+                    tcb->state = TCP_TIME_WAIT;
+                    if (tcp_ctx->sim->sched != NULL) {
+                        uint64_t now = scheduler_now(tcp_ctx->sim->sched);
+                        Event   *e   = event_create_callback(EVT_TIMER_EXPIRED, 
+                                                             now + TCP_TIME_WAIT_US, 
+                                                             NULL, 
+                                                             NULL, 
+                                                             NULL, 
+                                                             tcb, 
+                                                             tcp_time_wait_handler, 
+                                                            (TcpTable *)tcp_ctx->table);
+                        if (e) {
+                            int res = scheduler_schedule(tcp_ctx->sim->sched, e);
+                            if (res == -1) {
+                                event_free(e);
+                            }
+                        }
+                    }
+                    
+                    packet_free(pkt);
+                    return 0;
+                }
                 
                 packet_free(pkt);
                 return 0;
             }
-            
-            packet_free(pkt);
-            return 0;
-        }
-    }
-
-    if (tcb->state == TCP_LAST_ACK) {
-        if ((flags & TCP_FLAG_ACK) && ack_num > tcb->snd_una) {
-            tcb->snd_una = ack_num;
-            tcp_sendq_ack(tcb, ack_num);
-            int fin_still_unacked = 0;
-            for (int i = 0; i < TCP_MAX_INFLIGHT; i++) {
-                TcpSegment *seg = &tcb->sendq.entries[i];
-                if (seg->pkt && (seg->flags & TCP_FLAG_FIN)) {
-                    fin_still_unacked = 1;
-                    break;
+            break;
+    
+        /*
+         * LAST_ACK Receives ACK
+         */
+        case TCP_LAST_ACK:
+            if ((flags & TCP_FLAG_ACK) && ack_num > tcb->snd_una) {
+                tcb->snd_una = ack_num;
+                tcp_sendq_ack(tcb, ack_num);
+                int fin_still_unacked = 0;
+                for (int i = 0; i < TCP_MAX_INFLIGHT; i++) {
+                    TcpSegment *seg = &tcb->sendq.entries[i];
+                    if (seg->pkt && (seg->flags & TCP_FLAG_FIN)) {
+                        fin_still_unacked = 1;
+                        break;
+                    }
                 }
-            }
-            int fin_is_acked = !fin_still_unacked;
-            if (fin_is_acked) {
-                tcp_release_tcb(tcp_ctx->table, tcb);
+                int fin_is_acked = !fin_still_unacked;
+                if (fin_is_acked) {
+                    tcp_release_tcb(tcp_ctx->table, tcb);
+                    packet_free(pkt);
+                    return 0;
+                }
+
                 packet_free(pkt);
                 return 0;
             }
-
+            break;
+ 
+        /*
+         * TIME_WAIT Consumes Late Segment
+         */
+        case TCP_TIME_WAIT:
             packet_free(pkt);
             return 0;
-        }
+
+        /*
+         * Unhandled State
+         */
+        default:
+            packet_free(pkt);  
+            iface->rx_dropped++;
+            return -1;
     }
 
-    packet_free(pkt);  
+    packet_free(pkt);
     iface->rx_dropped++;
     return -1;
 }
@@ -874,14 +894,29 @@ int  tcp_send(Simulator *sim, Tcb *tcb, const uint8_t *data, size_t len) {
 
     uint32_t old_snd_nxt = tcb->snd_nxt;
     Packet *track_clone = NULL;
-    int res = tcp_send_segment(sim, tcb->local_ip, tcb->remote_ip, tcb->local_port, tcb->remote_port, old_snd_nxt, tcb->rcv_nxt, TCP_FLAG_ACK | TCP_FLAG_PSH, data, send_len, &track_clone);
+    int res = tcp_send_segment(sim, 
+                               tcb->local_ip, 
+                               tcb->remote_ip, 
+                               tcb->local_port, 
+                               tcb->remote_port, 
+                               old_snd_nxt, 
+                               tcb->rcv_nxt, 
+                               TCP_FLAG_ACK | TCP_FLAG_PSH, 
+                               data, 
+                               send_len, 
+                               &track_clone);
     if (res == -1) {
         packet_free(track_clone);
         return -1;
     } 
 
     uint64_t now = sim->sched ? scheduler_now(sim->sched) : 0;
-    if (tcp_sendq_track(tcb, track_clone, old_snd_nxt, old_snd_nxt + send_len, TCP_FLAG_ACK | TCP_FLAG_PSH, now) == -1) {
+    if (tcp_sendq_track(tcb, 
+                        track_clone, 
+                        old_snd_nxt, 
+                        old_snd_nxt + send_len, 
+                        TCP_FLAG_ACK | TCP_FLAG_PSH, 
+                        now) == -1) {
         packet_free(track_clone);
         return -1;
     }
@@ -895,5 +930,102 @@ int  tcp_send(Simulator *sim, Tcb *tcb, const uint8_t *data, size_t len) {
 }
 
 
-int  tcp_close(Simulator *sim, Tcb *tcb);
-void tcp_retransmit_handler(const Event *e, void *ctx);
+int  tcp_close(Simulator *sim, Tcb *tcb) {
+    if (!sim || !tcb) {
+        return -1;
+    }
+
+    if (tcb->valid != 1) {
+        return -1;
+    }
+
+    if (tcb->state != TCP_ESTABLISHED && tcb->state != TCP_CLOSE_WAIT) {
+        return -1;
+    }
+
+    if (tcp_sendq_has_unacked(tcb)) {
+        return -1;
+    }
+
+    TcpState old_state = tcb->state;
+    Packet  *track_clone = NULL;
+    int res = tcp_send_segment(sim, 
+                               tcb->local_ip, 
+                               tcb->remote_ip, 
+                               tcb->local_port, 
+                               tcb->remote_port, 
+                               tcb->snd_nxt, 
+                               tcb->rcv_nxt, 
+                               TCP_FLAG_FIN | TCP_FLAG_ACK, 
+                               NULL, 
+                               0, 
+                               &track_clone);
+    if (res == -1) {
+        packet_free(track_clone);
+        return -1;
+    }
+    uint64_t now = sim->sched ? scheduler_now(sim->sched) : 0;
+    if (tcp_sendq_track(tcb, 
+                        track_clone, 
+                        tcb->snd_nxt, 
+                        tcb->snd_nxt + 1, 
+                        TCP_FLAG_FIN | TCP_FLAG_ACK, 
+                        now) == -1) {
+        packet_free(track_clone);
+        return -1;
+    }   
+    tcb->snd_nxt += 1;
+    if (old_state == TCP_ESTABLISHED) {
+        tcb->state = TCP_FIN_WAIT_1;
+    } else if (old_state == TCP_CLOSE_WAIT) {
+        tcb->state = TCP_LAST_ACK;
+    }
+
+    if (sim->sched) {
+        tcp_schedule_retransmit(sim, NULL, tcb);
+    }
+
+    return 0;
+}
+
+void tcp_retransmit_handler(const Event *e, void *ctx) {
+    if (!e) {
+        return;
+    }
+
+    TcpContext *tcp_ctx = (TcpContext *)ctx;
+    if (!tcp_ctx || !tcp_ctx->sim || !tcp_ctx->table) {
+        return;
+    }
+
+    Tcb *tcb = (Tcb *)e->data;
+    if (!tcb || tcb->valid != 1) {
+        return;
+    }
+
+    for (int i = 0; i < TCP_MAX_INFLIGHT; i++) {
+        TcpSegment *seg = &tcb->sendq.entries[i];
+        if (seg->pkt && seg->acked == 0) {
+            Packet *clone = packet_clone(seg->pkt);
+            if (!clone) {
+                continue;
+            }
+
+            if (ip_output(tcp_ctx->sim, 
+                          tcb->local_ip, 
+                          tcb->remote_ip, 
+                          IPPROTO_TCP, 
+                          clone) == -1) {
+                packet_free(clone);
+                return;
+            }
+
+            seg->retransmits++;
+            if (tcp_ctx->sim->sched) {
+                seg->sent_ts = scheduler_now(tcp_ctx->sim->sched);
+                tcp_schedule_retransmit(tcp_ctx->sim, tcp_ctx, tcb);
+            }
+        }
+
+    }
+}

@@ -20,7 +20,7 @@ Scheduler *scheduler_create(size_t capacity) {
         return NULL;
     }
 
-    s->now = 0;
+    s->now     = 0;
     s->running = 0; 
     return s;
 }

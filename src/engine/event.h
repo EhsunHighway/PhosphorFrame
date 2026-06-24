@@ -117,7 +117,12 @@ int         event_queue_is_empty(const EventQueue *eq);
     ensures \result != \null ==> \result->handler == \null;
     ensures \result != \null ==> \result->handler_ctx == \null;
 */
-Event      *event_create(EventType type, uint64_t timestamp, void *src, void *dst, void *packet, void *data);
+Event      *event_create(EventType type, 
+                         uint64_t timestamp, 
+                         void *src, 
+                         void *dst, 
+                         void *packet, 
+                         void *data);
 
 /*@
     allocates \result;
@@ -125,9 +130,14 @@ Event      *event_create(EventType type, uint64_t timestamp, void *src, void *ds
     ensures \result != \null ==> \result->handler == handler;
     ensures \result != \null ==> \result->handler_ctx == handler_ctx;
 */
-Event      *event_create_callback(EventType type, uint64_t timestamp,
-                                  void *src, void *dst, void *packet, void *data,
-                                  EventCallback handler, void *handler_ctx);
+Event      *event_create_callback(EventType type, 
+                                  uint64_t timestamp,
+                                  void *src, 
+                                  void *dst, 
+                                  void *packet, 
+                                  void *data,
+                                  EventCallback handler, 
+                                  void *handler_ctx);
 
 void        event_free(Event *e);
 

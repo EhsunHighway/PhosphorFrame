@@ -2,7 +2,11 @@
 #include <string.h>
 #include "interface.h"
 
-Interface     *interface_create(const char *name, const uint8_t mac[6], uint32_t ip_addr, uint8_t prefix_len, uint16_t mtu) {
+Interface     *interface_create(const char *name, 
+                                const uint8_t mac[6], 
+                                uint32_t ip_addr, 
+                                uint8_t prefix_len, 
+                                uint16_t mtu) {
     Interface *iface = malloc(sizeof(Interface));
     if (!iface) {
         return NULL;
@@ -11,23 +15,23 @@ Interface     *interface_create(const char *name, const uint8_t mac[6], uint32_t
     strncpy(iface->name, name, sizeof(iface->name) - 1);
     iface->name[sizeof(iface->name) - 1] = '\0';  // ensure null-termination
     memcpy(iface->mac, mac, sizeof(iface->mac));
-    iface->ip_addr = ip_addr;
-    iface->prefix_len = prefix_len;
-    iface->mtu = mtu;
-    iface->up = 0;  // default to down
-    iface->link = NULL;
-    iface->device = NULL;
-    iface->tx_bytes = 0;
-    iface->rx_bytes = 0;
-    iface->rx_handler = NULL;
-    iface->handler_ctx = NULL;
-    iface->arp_cache = NULL;
-    iface->rx_dropped = 0;
-    iface->rx_errors = 0;
-    iface->tx_errors = 0;
-    iface->state = IFACE_OK;
-    iface->last_rx_time = 0;
-    iface->last_tx_time = 0;
+    iface->ip_addr         = ip_addr;
+    iface->prefix_len      = prefix_len;
+    iface->mtu             = mtu;
+    iface->up              = 0;  // default to down
+    iface->link            = NULL;
+    iface->device          = NULL;
+    iface->tx_bytes        = 0;
+    iface->rx_bytes        = 0;
+    iface->rx_handler      = NULL;
+    iface->handler_ctx     = NULL;
+    iface->arp_cache       = NULL;
+    iface->rx_dropped      = 0;
+    iface->rx_errors       = 0;
+    iface->tx_errors       = 0;
+    iface->state           = IFACE_OK;
+    iface->last_rx_time    = 0;
+    iface->last_tx_time    = 0;
     iface->last_error_time = 0;
     return iface;
 }
