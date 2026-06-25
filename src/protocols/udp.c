@@ -13,7 +13,10 @@ void udp_init(UdpState *state) {
     state->count = 0;
 }
 
-int  udp_bind(UdpState *state, uint16_t port, Udp_Recv_Handler recv_handler, void *ctx) {
+int  udp_bind(UdpState        *state,
+              uint16_t         port,
+              Udp_Recv_Handler recv_handler,
+              void            *ctx) {
     if (!state || !recv_handler || port == 0) {
         return -1;
     }

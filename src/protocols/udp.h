@@ -47,7 +47,7 @@ typedef struct __attribute__((packed)) UdpHeader {
     behavior null:
         assumes state == \null;
         assigns \nothing;
-    
+
     behavior valid:
         assumes \valid(state);
         assigns state->sockets[0..32-1], state->count;
@@ -73,7 +73,7 @@ void udp_init(UdpState *state);
                 state->sockets[i].port == port;
         assigns \nothing;
         ensures \result == -1;
-    
+
     behavior full:
         assumes \valid(state) && recv_handler != \null && port != 0;
         assumes \forall integer i; 0 <= i < 32 ==>
@@ -150,7 +150,7 @@ int  udp_unbind(UdpState *state, uint16_t port);
         assumes payload_len == 0 || \valid_read(payload + (0..payload_len-1));
         assigns \nothing;
         ensures \result == 0 || \result == -1;
-    
+
     complete behaviors;
 */
 int  udp_send(Simulator     *sim,
@@ -194,7 +194,7 @@ int  udp_send(Simulator     *sim,
 
     complete behaviors;
 */
-int  udp_receive(Interface *iface, 
+int  udp_receive(Interface *iface,
                  Packet    *pkt,
                  void      *ctx);
 
