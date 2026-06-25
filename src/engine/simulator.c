@@ -81,20 +81,20 @@ uint64_t   simulator_now(const Simulator *sim) {
 }
 
 
-int        simulator_inject_packet(Simulator *sim, 
-                                   Device *src, 
-                                   Device *dst, 
-                                   Packet *pkt, 
-                                   uint64_t delay_us) {
+int        simulator_inject_packet(Simulator *sim,
+                                   Device    *src,
+                                   Device    *dst,
+                                   Packet    *pkt,
+                                   uint64_t   delay_us) {
     if (!sim || !src || !dst || !pkt) {
         return -1;
     }
 
-    Event *e = event_create(EVT_PACKET_SEND, 
-                            sim->sched->now + delay_us, 
-                            src, 
-                            dst, 
-                            pkt, 
+    Event *e = event_create(EVT_PACKET_SEND,
+                            sim->sched->now + delay_us,
+                            src,
+                            dst,
+                            pkt,
                             NULL);
     if (!e) {
         return -1;
@@ -104,10 +104,16 @@ int        simulator_inject_packet(Simulator *sim,
 }
 
 
-void       simulator_register_handler(Simulator *sim, EventType type, EventHandler fn, void *ctx) {
+void       simulator_register_handler(Simulator   *sim,
+                                      EventType    type,
+                                      EventHandler fn,
+                                      void        *ctx) {
     if (!sim || !fn || type < 0 || type >= EVT_TYPE_COUNT) {
         return;
     }
 
-    scheduler_register(sim->sched, type, fn, ctx);
+    scheduler_register(sim->sched,
+                       type,
+                       fn,
+                       ctx);
 }

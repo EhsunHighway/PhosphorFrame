@@ -2,11 +2,11 @@
 #include <string.h>
 #include "interface.h"
 
-Interface     *interface_create(const char *name, 
-                                const uint8_t mac[6], 
-                                uint32_t ip_addr, 
-                                uint8_t prefix_len, 
-                                uint16_t mtu) {
+Interface     *interface_create(const char    *name,
+                                const uint8_t  mac[6],
+                                uint32_t       ip_addr,
+                                uint8_t        prefix_len,
+                                uint16_t       mtu) {
     Interface *iface = malloc(sizeof(Interface));
     if (!iface) {
         return NULL;
@@ -91,9 +91,11 @@ void           interface_add_rx_bytes(Interface *iface, uint64_t n) {
     }
 }
 
-void           interface_set_rx_handler(Interface *iface, RxHandler fn, void *ctx) {
+void           interface_set_rx_handler(Interface *iface,
+                                        RxHandler  fn,
+                                        void      *ctx) {
     if (iface) {
-        iface->rx_handler = fn;
+        iface->rx_handler  = fn;
         iface->handler_ctx = ctx;
     }
 }

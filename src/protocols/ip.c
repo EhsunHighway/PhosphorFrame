@@ -4,8 +4,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-static void ip_rx_shim(Interface *iface, Packet *pkt, uint16_t ethertype, void *ctx) {
-    ip_receive(iface, pkt, ethertype, ctx);
+static void ip_rx_shim(Interface *iface,
+                       Packet    *pkt,
+                       uint16_t   ethertype,
+                       void      *ctx) {
+    ip_receive(iface,
+               pkt,
+               ethertype,
+               ctx);
 }
 
 static uint32_t ip_prefix_mask(uint8_t prefix_len) {
@@ -18,7 +24,9 @@ static uint32_t ip_prefix_mask(uint8_t prefix_len) {
     return 0xFFFFFFFFu << (32 - prefix_len);
 }
 
-static int ip_same_subnet(uint32_t a_host, uint32_t b_host, uint8_t prefix_len) {
+static int ip_same_subnet(uint32_t a_host,
+                          uint32_t b_host,
+                          uint8_t  prefix_len) {
     uint32_t mask = ip_prefix_mask(prefix_len);
     return (a_host & mask) == (b_host & mask);
 }
@@ -81,13 +89,16 @@ int ip_stack_bind_interface(IpStack *stack, Interface *iface) {
     return 0;
 }
 
-int ip_stack_register_protocol(IpStack *stack, uint8_t protocol, IpProtocolHandler handler, void *ctx) {
+int ip_stack_register_protocol(IpStack           *stack,
+                               uint8_t            protocol,
+                               IpProtocolHandler  handler,
+                               void              *ctx) {
     if (!stack || !handler) {
         return -1;
     }
 
     stack->protocols[protocol].handler = handler;
-    stack->protocols[protocol].ctx = ctx;
+    stack->protocols[protocol].ctx     = ctx;
     return 0;
 }
 
@@ -97,11 +108,14 @@ int ip_stack_unregister_protocol(IpStack *stack, uint8_t protocol) {
     }
 
     stack->protocols[protocol].handler = NULL;
-    stack->protocols[protocol].ctx = NULL;
+    stack->protocols[protocol].ctx     = NULL;
     return 0;
 }
 
-int  ip_receive(Interface *iface, Packet *frame, uint16_t ethertype, void *ctx) {
+int  ip_receive(Interface *iface,
+                 Packet   *frame,
+                 uint16_t  ethertype,
+                 void     *ctx) {
     (void)ethertype;
 
     if (!iface || !frame || frame->len < IP_HDR_LEN) {
@@ -128,14 +142,14 @@ int  ip_receive(Interface *iface, Packet *frame, uint16_t ethertype, void *ctx) 
     }
 
      // Verify checksum
-    uint8_t protocol = ip_hdr->protocol;
+    uint8_t protocol    = ip_hdr->protocol;
     iface->rx_bytes += frame->len;
-    IpStack *stack = (IpStack *)ctx;
+    IpStack   *stack    = (IpStack *)ctx;
     Simulator *sim = stack ? stack->sim : NULL;
     iface->last_rx_time = sim ? simulator_now(sim) : 0;
-    frame->data += IP_HDR_LEN;
-    frame->len -= IP_HDR_LEN;
-    frame->layer = 4;
+    frame->data        += IP_HDR_LEN;
+    frame->len         -= IP_HDR_LEN;
+    frame->layer        = 4;
 
     if (!stack) {
         return 0;
@@ -150,34 +164,48 @@ int  ip_receive(Interface *iface, Packet *frame, uint16_t ethertype, void *ctx) 
 }
 
 
-int  ip_send(Simulator *sim, Interface *iface, uint8_t dst_mac[6], uint32_t src_ip, uint32_t dst_ip, uint8_t protocol, Packet *payload) {
+int  ip_send(Simulator *sim,
+             Interface *iface,
+             uint8_t    dst_mac[6],
+             uint32_t   src_ip,
+             uint32_t   dst_ip,
+             uint8_t    protocol,
+             Packet    *payload) {
     if (!sim || !iface || !dst_mac || !payload) {
         return -1;
     }
 
     IpHeader ip_hdr;
-    ip_hdr.version_ihl = (4 << 4) | (IP_HDR_LEN / 4);
-    ip_hdr.dscp_ecn = 0;
-    ip_hdr.total_length = ns_htons(IP_HDR_LEN + payload->len);
-    ip_hdr.identification = 0; 
+    ip_hdr.version_ihl           = (4 << 4) | (IP_HDR_LEN / 4);
+    ip_hdr.dscp_ecn              = 0;
+    ip_hdr.total_length          = ns_htons(IP_HDR_LEN + payload->len);
+    ip_hdr.identification        = 0;
     ip_hdr.flags_fragment_offset = 0;
-    ip_hdr.ttl = IP_DEFAULT_TTL;
-    ip_hdr.protocol = protocol;
-    ip_hdr.header_checksum = 0;
-    ip_hdr.src_ip = ns_htonl(src_ip);
-    ip_hdr.dst_ip = ns_htonl(dst_ip);
-    ip_hdr.header_checksum = ip_checksum(&ip_hdr);
+    ip_hdr.ttl                   = IP_DEFAULT_TTL;
+    ip_hdr.protocol              = protocol;
+    ip_hdr.header_checksum       = 0;
+    ip_hdr.src_ip                = ns_htonl(src_ip);
+    ip_hdr.dst_ip                = ns_htonl(dst_ip);
+    ip_hdr.header_checksum       = ip_checksum(&ip_hdr);
 
     if (packet_prepend(payload, &ip_hdr, sizeof(IpHeader)) == -1) {
         return -1;
     }
-    payload->layer = 3;
-    iface->tx_bytes += payload->len;
+    payload->layer      = 3;
+    iface->tx_bytes    += payload->len;
     iface->last_tx_time = simulator_now(sim);
-    return ethernet_send(sim, iface, dst_mac, ETHERTYPE_IPV4, payload);
+    return ethernet_send(sim,
+                         iface,
+                         dst_mac,
+                         ETHERTYPE_IPV4,
+                         payload);
 }
 
-int ip_output(Simulator *sim, uint32_t src_ip, uint32_t dst_ip, uint8_t protocol, Packet *payload) {
+int ip_output(Simulator *sim,
+              uint32_t  src_ip,
+              uint32_t  dst_ip,
+              uint8_t   protocol,
+              Packet   *payload) {
     if (!sim || !payload) {
         return -1;
     }
@@ -197,13 +225,25 @@ int ip_output(Simulator *sim, uint32_t src_ip, uint32_t dst_ip, uint8_t protocol
         if (arp_send_request(sim, iface, ns_htonl(dst_ip)) != 0) {
             return -1;
         }
-        if (arp_pending_enqueue(iface->arp_cache, iface, dst_ip, src_ip, dst_ip, protocol, payload) != 0) {
+        if (arp_pending_enqueue(iface->arp_cache,
+                                iface,
+                                dst_ip,
+                                src_ip,
+                                dst_ip,
+                                protocol,
+                                payload) != 0) {
             return -1;
         }
         return 0;
     }
 
-    return ip_send(sim, iface, dst_mac, src_ip, dst_ip, protocol, payload);
+    return ip_send(sim,
+                   iface,
+                   dst_mac,
+                   src_ip,
+                   dst_ip,
+                   protocol,
+                   payload);
 }
 
 /*

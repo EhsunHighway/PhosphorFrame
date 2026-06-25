@@ -53,8 +53,14 @@ static void arp_request_handler(const Event *e, void *ctx) {
     int result = arp_send_reply(sim, iface, pkt);
     if (iface->arp_cache) {
         uint32_t sender_ip = ns_ntohl(arp_pkt->sender_protocol_addr);
-        arp_cache_add(iface->arp_cache, sender_ip, arp_pkt->sender_hardware_addr, e->timestamp);
-        arp_pending_flush(sim, iface->arp_cache, sender_ip, arp_pkt->sender_hardware_addr);
+        arp_cache_add(iface->arp_cache,
+                      sender_ip,
+                      arp_pkt->sender_hardware_addr,
+                      e->timestamp);
+        arp_pending_flush(sim,
+                          iface->arp_cache,
+                          sender_ip,
+                          arp_pkt->sender_hardware_addr);
     }
 
     if (result == 0) {
@@ -81,8 +87,14 @@ static void arp_reply_handler(const Event *e, void *ctx) {
     // Populate the cache with the sender's IP -> MAC mapping from the reply
     if (iface->arp_cache) {
         uint32_t sender_ip = ns_ntohl(arp_pkt->sender_protocol_addr);
-        arp_cache_add(iface->arp_cache, sender_ip, arp_pkt->sender_hardware_addr, e->timestamp);
-        arp_pending_flush(sim, iface->arp_cache, sender_ip, arp_pkt->sender_hardware_addr);
+        arp_cache_add(iface->arp_cache,
+                      sender_ip,
+                      arp_pkt->sender_hardware_addr,
+                      e->timestamp);
+        arp_pending_flush(sim,
+                          iface->arp_cache,
+                          sender_ip,
+                          arp_pkt->sender_hardware_addr);
     }
 
     iface->last_rx_time = e->timestamp;
@@ -93,11 +105,19 @@ void arp_init(Simulator *sim) {
         return;
     }
 
-    scheduler_register(sim->sched, EVT_ARP_REQUEST, arp_request_handler, sim);
-    scheduler_register(sim->sched, EVT_ARP_REPLY, arp_reply_handler, sim);
+    scheduler_register(sim->sched,
+                       EVT_ARP_REQUEST,
+                       arp_request_handler,
+                       sim);
+    scheduler_register(sim->sched,
+                       EVT_ARP_REPLY,
+                       arp_reply_handler,
+                       sim);
 }
 
-int  arp_send_request(Simulator *sim, Interface *iface, uint32_t target_ip) {
+int  arp_send_request(Simulator *sim,
+                      Interface *iface,
+                      uint32_t   target_ip) {
     if (!sim || !iface || !target_ip) {
         return -1;
     }
@@ -128,11 +148,17 @@ int  arp_send_request(Simulator *sim, Interface *iface, uint32_t target_ip) {
      * ARP requests are always broadcast on the local network, 
      * so we use the Ethernet broadcast address as the destination MAC.
      */
-    int res = ethernet_send(sim, iface, ETH_BROADCAST, ETHERTYPE_ARP, pkt);
+    int res = ethernet_send(sim,
+                            iface,
+                            ETH_BROADCAST,
+                            ETHERTYPE_ARP,
+                            pkt);
     return res >= 0 ? 0 : -1;
 }
 
-int  arp_send_reply(Simulator *sim, Interface *iface, Packet *req_pkt) {
+int  arp_send_reply(Simulator *sim,
+                    Interface *iface,
+                    Packet    *req_pkt) {
     if (!sim || !iface || !req_pkt) {
         return -1;
     }
@@ -172,6 +198,10 @@ int  arp_send_reply(Simulator *sim, Interface *iface, Packet *req_pkt) {
     packet_prepend(reply_pkt, arp_pkt, sizeof(ArpPacket));
     free(arp_pkt);
 
-    int res = ethernet_send(sim, iface, dst_mac, ETHERTYPE_ARP, reply_pkt); // unicast to requester
+    int res = ethernet_send(sim,
+                            iface,
+                            dst_mac,
+                            ETHERTYPE_ARP,
+                            reply_pkt); // unicast to requester
     return res >= 0 ? 0 : -1;
 }

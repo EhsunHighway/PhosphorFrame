@@ -9,10 +9,10 @@
 typedef struct Topology {
     Device **devices;    // array of Device* pointers (heap, grows via realloc)
     int      dev_count;  // number of live devices
-    int   dev_cap;    // current allocated capacity of devices array
+    int      dev_cap;    // current allocated capacity of devices array
     Link   **links;      // array of Link* pointers (heap, grows via realloc)
     int      link_count; // number of live links
-    int   link_cap;   // current allocated capacity of links array
+    int      link_cap;   // current allocated capacity of links array
 } Topology;
 
 /*@
@@ -106,7 +106,9 @@ Device   *topology_find_device_by_ip(const Topology *topo, uint32_t ip_addr);
     complete behaviors;
     disjoint behaviors;
 */
-Link     *topology_get_link_between(const Topology *topo, const Interface *iface_a, const Interface *iface_b);
+Link     *topology_get_link_between(const Topology  *topo,
+                                    const Interface *iface_a,
+                                    const Interface *iface_b);
 
 /*@
     behavior null:

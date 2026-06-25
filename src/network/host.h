@@ -50,7 +50,9 @@ typedef struct Host {
     complete behaviors;
     disjoint behaviors;
 */
-Host *host_create(const char *name, Simulator *sim, uint32_t gateway_ip);
+Host *host_create(const char *name,
+                  Simulator  *sim,
+                  uint32_t    gateway_ip);
 
 /*@
     behavior null:

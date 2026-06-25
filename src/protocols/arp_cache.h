@@ -98,13 +98,13 @@ int  arp_cache_lookup(const ArpCache *cache,
         assigns cache->pending[0..31], cache->pending_count;
         ensures \result == 0 || \result == -1;
 */
-int  arp_pending_enqueue(ArpCache *cache,
+int  arp_pending_enqueue(ArpCache  *cache,
                          Interface *iface,
-                         uint32_t target_ip,
-                         uint32_t src_ip,
-                         uint32_t dst_ip,
-                         uint8_t protocol,
-                         Packet *payload);
+                         uint32_t   target_ip,
+                         uint32_t   src_ip,
+                         uint32_t   dst_ip,
+                         uint8_t    protocol,
+                         Packet    *payload);
 
 /*@
     behavior null:

@@ -75,7 +75,9 @@ int  ethernet_send(Simulator    *sim,
                          ethernet_receive_event, sim);
 }
 
-int  ethernet_receive(Interface *iface, Packet *frame, uint16_t *out_ethertype) {
+int  ethernet_receive(Interface *iface,
+                      Packet    *frame,
+                      uint16_t  *out_ethertype) {
     if (!iface || !frame || !out_ethertype || frame->len < ETH_HDR_LEN) {
         return -1;
     }

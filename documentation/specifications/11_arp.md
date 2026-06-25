@@ -1,266 +1,636 @@
-# Module 11 — ARP (Address Resolution Protocol)
+# Module 11 - ARP
 
 **Files:** `src/protocols/arp.c`, `src/protocols/arp.h`
 **Status:** Implemented core ARP exchange
-**Depends on:** ethernet, interface, device, packet, arp_cache, simulator, scheduler
+**Depends on:** `byte_order`, `ethernet`, `packet`, `interface`, `device`,
+`arp_cache`, `simulator`, `scheduler`
 
----
+## Concepts First
 
-## The Problem
+IPv4 addresses identify layer-3 endpoints. Ethernet sends frames to layer-2 MAC
+addresses.
 
-IP works at Layer 3. Ethernet works at Layer 2. When Host A wants to send an
-IP packet to Host B on the **same subnet**, it knows the destination IP —
-but `ethernet_send` requires a **destination MAC**. ARP bridges that gap.
+ARP bridges that gap on a local link:
 
-```
-Host A knows:  192.168.1.10              (IP of Host B)
-Host A needs:  ??:??:??:??:??:??         (MAC of Host B)
-```
-
-## The Two-Phase Exchange
-
-```
-Host A (192.168.1.1)                          Host B (192.168.1.10)
-AA:AA:AA:AA:AA:AA                             BB:BB:BB:BB:BB:BB
-        |                                              |
-        |──── WHO HAS 192.168.1.10? ─────────────────►|   (broadcast)
-        |     ETH dst: FF:FF:FF:FF:FF:FF               |
-        |     ARP opcode: REQUEST                      |
-        |     sender_hw:  AA:AA:AA:AA:AA:AA            |
-        |     sender_ip:  192.168.1.1                  |
-        |     target_hw:  00:00:00:00:00:00            |
-        |     target_ip:  192.168.1.10                 |
-        |                                              |
-        |                            [cache adds A → AA:AA:AA] ← REQ handler
-        |                                              |
-        |◄─── I HAVE IT. I AM BB:BB:BB:BB:BB:BB ──────|   (unicast)
-        |     ETH dst: AA:AA:AA:AA:AA:AA               |
-        |     ARP opcode: REPLY                        |
-        |     sender_hw:  BB:BB:BB:BB:BB:BB            |
-        |     sender_ip:  192.168.1.10                 |
-        |     target_hw:  AA:AA:AA:AA:AA:AA            |
-        |     target_ip:  192.168.1.1                  |
-        |                                              |
-   [cache adds B → BB:BB:BB] ← REPLY handler           |
-        |                                              |
-        |════ now sends real IP packet ═══════════════►|   (unicast)
+```text
+I know the IPv4 address. What MAC address should Ethernet send to?
 ```
 
-Notice **both sides learn**: the requester learns B from the reply, and the
-responder learns A "for free" from the incoming request — no extra round trip.
+Example:
 
-## Module Boundary
+```text
+Host A knows:  192.168.1.10
+Host A needs:  BB:BB:BB:BB:BB:BB
+```
 
-`arp.c` / `arp.h` own ARP wire behavior: simulator event registration, ARP
-request handling, ARP reply handling, and request/reply packet construction.
+ARP answers by sending a local broadcast request and receiving a unicast reply.
 
-ARP does **not** own the ARP cache object. Host and Router own cache storage,
-Interface borrows a pointer to that cache, and ARP updates the borrowed cache
-when ARP frames arrive. The cache API and pending-packet rules are specified in
-[10_arp_cache.md](10_arp_cache.md).
+### Request And Reply
 
----
+Request:
 
-## Header File — `arp.h`
+```text
+Who has 192.168.1.10?
+Tell 192.168.1.1 at AA:AA:AA:AA:AA:AA.
+```
+
+Reply:
+
+```text
+192.168.1.10 is at BB:BB:BB:BB:BB:BB.
+```
+
+The request is sent to Ethernet broadcast because the target MAC is unknown.
+
+The reply is sent unicast back to the requester because the request packet
+contains the requester's MAC address.
+
+### Both Sides Learn
+
+The responder learns the requester's mapping from the request:
+
+```text
+sender_protocol_addr -> sender_hardware_addr
+```
+
+The requester learns the responder's mapping from the reply.
+
+In this implementation, both request and reply handlers add the sender mapping
+to `iface->arp_cache` when the receiving interface has a cache pointer.
+
+### ARP Protocol Versus ARP Cache
+
+This module owns ARP wire behavior:
+
+- ARP packet layout
+- ARP request construction
+- ARP reply construction
+- ARP request handler registration
+- ARP reply handler registration
+- received request/reply handling
+
+It does not own the ARP cache object.
+
+The cache is owned by Host or Router. Interface borrows a pointer through:
+
+```c
+iface->arp_cache
+```
+
+ARP updates that borrowed cache pointer. The cache API and pending-packet rules
+are specified in `10_arp_cache.md`.
+
+### Event Dispatch In Current Code
+
+`arp_init(sim)` registers two scheduler fallback handlers:
+
+```text
+EVT_ARP_REQUEST -> arp_request_handler, ctx = sim
+EVT_ARP_REPLY   -> arp_reply_handler,   ctx = sim
+```
+
+The handlers themselves are `static` inside `arp.c`; they are not public API.
+
+The event passed to a handler must contain:
+
+```text
+e->dst_device = receiving Interface *
+e->packet     = Packet * whose data begins at ArpPacket
+```
+
+Ethernet receive strips the Ethernet header before ARP sees the packet. ARP
+expects `pkt->data` to point at the ARP payload.
+
+### Byte Order
+
+ARP wire fields are network byte order where the protocol requires multi-byte
+integers:
+
+- `hardware_type`
+- `protocol_type`
+- `opcode`
+- `sender_protocol_addr`
+- `target_protocol_addr`
+
+The current implementation:
+
+- writes `hardware_type`, `protocol_type`, and `opcode` with `ns_htons`
+- stores `iface->ip_addr` directly into sender protocol address
+- stores `target_ip` directly into request target protocol address
+- compares target IP by applying `ns_ntohl` to both ARP target and
+  `iface->ip_addr`
+- stores cache IP keys as `ns_ntohl(sender_protocol_addr)`
+
+That means callers should pass `target_ip` to `arp_send_request` in the same
+wire/network-order convention used by `Interface.ip_addr`.
+
+## Purpose
+
+The ARP module constructs and handles ARP request/reply packets.
+
+It provides:
+
+- ARP constants
+- packed ARP packet layout
+- scheduler registration for ARP request/reply events
+- ARP request send helper
+- ARP reply send helper
+- static request/reply handlers used through scheduler registration
+
+It does not:
+
+- allocate or free ARP cache storage
+- own pending packet queues
+- parse Ethernet headers
+- send IP packets directly except through `arp_pending_flush`
+- decide route selection
+- implement gratuitous ARP
+- implement ARP probes
+- implement ARP cache timeout cleanup
+
+## Architecture Boundary
+
+| Responsibility | Owner |
+| --- | --- |
+| Build ARP request/reply payloads | ARP |
+| Register ARP event handlers | ARP |
+| Convert ARP fixed fields to/from network byte order | ARP |
+| Send ARP payload over Ethernet | ARP through Ethernet |
+| Store learned mappings | ARP cache |
+| Own ARP cache storage | Host/Router |
+| Queue unresolved IP payloads | ARP cache pending queue |
+| Retry pending payloads after mapping learned | ARP cache via `ip_send` |
+| Strip Ethernet header and deliver ARP payload | Ethernet/interface receive path |
+
+ARP depends on Ethernet for frame transmission and on ARP cache for learned
+state. ARP should not contain Host or Router-specific ownership logic.
+
+## Data Model
 
 ### Constants
 
-| Macro                    | Value      | Meaning                                |
-|--------------------------|------------|----------------------------------------|
-| `HARDWARE_TYPE_ETHERNET` | `1`        | Hardware type field (RFC 826)          |
-| `PROTOCOL_TYPE_IPV4`     | `0x0800`   | Same value as `ETHERTYPE_IPV4`         |
-| `HARDWARE_ADDR_LEN`      | `6`        | MAC is 6 bytes                         |
-| `PROTOCOL_ADDR_LEN`      | `4`        | IPv4 is 4 bytes                        |
-| `ARP_OPCODE_REQUEST`     | `1`        | "Who has X?"                           |
-| `ARP_OPCODE_REPLY`       | `2`        | "It's me"                              |
-
-### Wire Format — `ArpPacket` (28 bytes, packed)
-
+```c
+#define HARDWARE_TYPE_ETHERNET 1
+#define PROTOCOL_TYPE_IPV4     0x0800
+#define HARDWARE_ADDR_LEN      6
+#define PROTOCOL_ADDR_LEN      4
+#define ARP_OPCODE_REQUEST     1
+#define ARP_OPCODE_REPLY       2
+#define ARP_CACHE_TIMEOUT_MS   300000
 ```
-  offset   field                       size
-  ──────   ─────                       ────
-    0      hardware_type               2     (htons → 1)
-    2      protocol_type               2     (htons → 0x0800)
-    4      hardware_addr_len           1     (= 6)
-    5      protocol_addr_len           1     (= 4)
-    6      opcode                      2     (htons → 1 or 2)
-    8      sender_hardware_addr[6]     6     (SHA)
-   14      sender_protocol_addr        4     (SPA — network order)
-   18      target_hardware_addr[6]     6     (THA)
-   24      target_protocol_addr        4     (TPA — network order)
-   28
-```
+
+`ARP_CACHE_TIMEOUT_MS` is declared in `arp.h`, but cleanup logic currently lives
+in `arp_cache.c`.
+
+### `ArpPacket`
 
 ```c
 typedef struct __attribute__((packed)) ArpPacket {
-    uint16_t  hardware_type;
-    uint16_t  protocol_type;
-    uint8_t   hardware_addr_len;
-    uint8_t   protocol_addr_len;
-    uint16_t  opcode;
-    uint8_t   sender_hardware_addr[6];
-    uint32_t  sender_protocol_addr;
-    uint8_t   target_hardware_addr[6];
-    uint32_t  target_protocol_addr;
+    uint16_t hardware_type;
+    uint16_t protocol_type;
+    uint8_t  hardware_addr_len;
+    uint8_t  protocol_addr_len;
+    uint16_t opcode;
+    uint8_t  sender_hardware_addr[HARDWARE_ADDR_LEN];
+    uint32_t sender_protocol_addr;
+    uint8_t  target_hardware_addr[HARDWARE_ADDR_LEN];
+    uint32_t target_protocol_addr;
 } ArpPacket;
 ```
 
-`__attribute__((packed))` is mandatory: without it the compiler would
-insert padding and the struct would no longer be 28 bytes on the wire.
+Wire layout:
 
-- **REQUEST:** THA = `00:00:00:00:00:00` (unknown — that's why we asked).
-- **REPLY:**   THA = SHA copied from the request (we know exactly who asked).
-
-## Dispatch Table — How handlers are reached
-
-`arp_init` registers one protocol-level handler for each ARP event type:
-
-```
-  Scheduler.handlers[EVT_TYPE_COUNT]
-  ┌───────────────────────┬──────────────────────┬───────┐
-  │ EVT_ARP_REQUEST       │ arp_request_handler  │ sim   │ ← arp_init()
-  │ EVT_ARP_REPLY         │ arp_reply_handler    │ sim   │ ← arp_init()
-  │ EVT_ROUTING_UPDATE    │ ...                  │       │
-  │ ...                                                  │
-  └──────────────────────────────────────────────────────┘
+```text
+offset  size  field
+0       2     hardware_type
+2       2     protocol_type
+4       1     hardware_addr_len
+5       1     protocol_addr_len
+6       2     opcode
+8       6     sender_hardware_addr
+14      4     sender_protocol_addr
+18      6     target_hardware_addr
+24      4     target_protocol_addr
+28            end
 ```
 
-`EVT_PACKET_RECEIVE` is not owned by ARP and is not globally owned by
-Ethernet. Link delivery events carry `ethernet_receive_event` as their
-per-event callback. After Ethernet strips the frame, the interface receive
-handler or Ethernet demultiplexing path decides whether the payload becomes
-ARP, IP, or another L3 protocol.
+The struct must be packed so its size and field offsets match the ARP wire
+format.
 
-The `ctx` slot carries `Simulator *sim` so handlers can schedule replies or
-flush pending packets through the cache API without globals. It is **not** the
-ARP cache owner.
+## Ownership And Lifetime
 
-The cache owner is selected at event time:
+`arp_send_request` creates:
 
-- ARP request received on interface `B0` updates `B0->arp_cache`.
-- ARP reply received on interface `A0` updates `A0->arp_cache`.
-- If a host/router has multiple interfaces, each interface may point to a
-  different cache or to a shared owner cache, depending on the device model.
-- A pure Layer-2 switch does not need ARP for forwarding. If a future switch
-  has a management IP or L3 interface, that logical interface should have an
-  ARP cache just like a host/router interface.
+- a `Packet`
+- a temporary `ArpPacket`
 
----
+It prepends the ARP packet bytes into the `Packet`, frees the temporary
+`ArpPacket`, and calls `ethernet_send`.
 
-## Function Call Sequence — REQUEST path
+`arp_send_reply` does the same for a reply packet.
 
-```
-Caller
-  │
-  └─► arp_send_request(sim, iface, target_ip)
-          │  malloc ArpPacket
-          │  fill: opcode = REQUEST, SHA = iface->mac,
-          │        SPA = iface->ip_addr,
-          │        THA = 00:00:00:00:00:00, TPA = target_ip
-          │  packet_create(28) + packet_prepend()
-          │
-          └─► ethernet_send(sim, iface, ETH_BROADCAST,
-                            ETHERTYPE_ARP, pkt)
-                  │  prepend EthernetHeader (dst = FF:FF:FF:FF:FF:FF)
-                  │
-                  └─► link_transmit(...)
-                          │
-                          └─► scheduler_schedule(EVT_PACKET_RECEIVE
-                                                  with ethernet callback)
-                                    │
-                            [sim advances time]
-                                    │
-                            scheduler calls event's ethernet callback
-                                    ▼
-                        ethernet_receive_event(e, sim)
-                            │  ethernet_receive → strips 14 bytes,
-                            │     out_ethertype = 0x0806
-                            │
-                            (in this simulator, the receive path that
-                             converts ETHERTYPE_ARP → EVT_ARP_REQUEST
-                             is implemented by injecting an
-                             EVT_ARP_REQUEST event; the demultiplex
-                             could equally well call arp directly via
-                             iface->rx_handler)
-                                    ▼
-                        arp_request_handler(e, ctx = sim)
-                            │  iface = (Interface *) e->dst_device
-                            │  pkt   = (Packet *)    e->packet
-                            │  if (ntohs(opcode) != REQUEST)           ⇒ ignore
-                            │  if (ntohl(TPA) != ntohl(iface->ip))     ⇒ ignore
-                            │  arp_send_reply(sim, iface, pkt) ─────┐
-                            │  arp_cache_add(iface->arp_cache,
-                            │                SPA, SHA, e->timestamp) │
-                            │  iface->last_tx_time = e->timestamp    │
-                            └───────────────────────────────────────►┘
+Current implementation note: after `ethernet_send` returns, the ARP send helpers
+do not free their original `Packet`. Since `ethernet_send`/`link_transmit`
+clones for scheduled delivery and does not free the caller packet, this is a
+current ownership issue to settle in code/tests.
+
+Handlers do not free the received ARP packet.
+
+ARP never frees `iface->arp_cache`.
+
+## Public API
+
+```c
+void arp_init(Simulator *sim);
+
+int  arp_send_request(Simulator *sim,
+                      Interface *iface,
+                      uint32_t   target_ip);
+
+int  arp_send_reply(Simulator *sim,
+                    Interface *iface,
+                    Packet    *req_pkt);
 ```
 
-## Function Call Sequence — REPLY path
+## Function Behavior
 
+### `arp_init`
+
+Required behavior:
+
+- If `sim == NULL`, return immediately.
+- Register `arp_request_handler` for `EVT_ARP_REQUEST` using `sim` as context.
+- Register `arp_reply_handler` for `EVT_ARP_REPLY` using `sim` as context.
+
+This function does not allocate or initialize an ARP cache.
+
+### `arp_send_request`
+
+Required behavior:
+
+- If `sim == NULL`, return `-1`.
+- If `iface == NULL`, return `-1`.
+- If `target_ip == 0`, return `-1`.
+- Allocate a packet with capacity `sizeof(ArpPacket)`.
+- Allocate a temporary `ArpPacket`.
+- If either allocation fails, free any partial allocation and return `-1`.
+- Fill the ARP request:
+  - `hardware_type = ns_htons(HARDWARE_TYPE_ETHERNET)`
+  - `protocol_type = ns_htons(PROTOCOL_TYPE_IPV4)`
+  - `hardware_addr_len = HARDWARE_ADDR_LEN`
+  - `protocol_addr_len = PROTOCOL_ADDR_LEN`
+  - `opcode = ns_htons(ARP_OPCODE_REQUEST)`
+  - `sender_hardware_addr = iface->mac`
+  - `sender_protocol_addr = iface->ip_addr`
+  - `target_hardware_addr = all zero bytes`
+  - `target_protocol_addr = target_ip`
+- Prepend the ARP bytes into the packet.
+- Free the temporary `ArpPacket`.
+- Send the packet through Ethernet broadcast:
+
+```c
+ethernet_send(sim, iface, ETH_BROADCAST, ETHERTYPE_ARP, pkt)
 ```
-arp_send_reply(sim, iface, req_pkt)
-  │  req = (ArpPacket *) req_pkt->data
-  │  dst_mac = req->sender_hardware_addr     ← unicast back to requester
-  │  dst_ip  = req->sender_protocol_addr
-  │  fill new ArpPacket:
-  │      opcode = REPLY
-  │      SHA    = iface->mac                 (I am the answer)
-  │      SPA    = iface->ip_addr
-  │      THA    = dst_mac
-  │      TPA    = dst_ip
-  │  packet_create(28) + packet_prepend()
-  │
-  └─► ethernet_send(sim, iface, dst_mac, ETHERTYPE_ARP, reply_pkt)
-          │
-          └─► link_transmit → scheduler_schedule(EVT_PACKET_RECEIVE
-                                                  with ethernet callback)
-                    │
-              [time advances]
-                    ▼
-          ethernet_receive_event → EVT_ARP_REPLY dispatched
-                    ▼
-          arp_reply_handler(e, ctx unused)
-              │  if (ntohs(opcode) != REPLY) ⇒ ignore
-              │  arp_cache_add(iface->arp_cache,
-              │                SPA, SHA, e->timestamp)
-              │  arp_pending_flush(sim, iface->arp_cache,
-              │                    SPA, SHA)
-              │  iface->last_rx_time = e->timestamp
-              └─►  (caller of arp_send_request can now lookup MAC)
+
+- Return `0` if `ethernet_send` returns a non-negative value.
+- Return `-1` if `ethernet_send` returns a negative value.
+
+Current implementation note: the return value from `packet_prepend` is not
+checked. With a newly created packet sized to `sizeof(ArpPacket)`, this should
+succeed, but the unchecked call is still part of current behavior.
+
+### `arp_send_reply`
+
+Required behavior:
+
+- If `sim == NULL`, return `-1`.
+- If `iface == NULL`, return `-1`.
+- If `req_pkt == NULL`, return `-1`.
+- If `req_pkt->data == NULL`, return `-1`.
+- If `req_pkt->len < sizeof(ArpPacket)`, return `-1`.
+- Interpret `req_pkt->data` as the request `ArpPacket`.
+- Copy `req->sender_hardware_addr` into local `dst_mac`.
+- Copy `req->sender_protocol_addr` into local `dst_ip`.
+- Allocate a reply packet with capacity `sizeof(ArpPacket)`.
+- Allocate a temporary `ArpPacket`.
+- If either allocation fails, free any partial allocation and return `-1`.
+- Fill the ARP reply:
+  - `hardware_type = ns_htons(HARDWARE_TYPE_ETHERNET)`
+  - `protocol_type = ns_htons(PROTOCOL_TYPE_IPV4)`
+  - `hardware_addr_len = HARDWARE_ADDR_LEN`
+  - `protocol_addr_len = PROTOCOL_ADDR_LEN`
+  - `opcode = ns_htons(ARP_OPCODE_REPLY)`
+  - `sender_hardware_addr = iface->mac`
+  - `sender_protocol_addr = iface->ip_addr`
+  - `target_hardware_addr = dst_mac`
+  - `target_protocol_addr = dst_ip`
+- Prepend the ARP bytes into the reply packet.
+- Free the temporary `ArpPacket`.
+- Send the reply through Ethernet unicast to `dst_mac`.
+- Return `0` if `ethernet_send` returns a non-negative value.
+- Return `-1` if `ethernet_send` returns a negative value.
+
+Current implementation note: the return value from `packet_prepend` is not
+checked here either.
+
+### `arp_request_handler`
+
+This function is static inside `arp.c`.
+
+Required behavior when invoked by the scheduler:
+
+- Interpret `ctx` as `Simulator *`.
+- Read receiving interface from `e->dst_device`.
+- Read packet from `e->packet`.
+- If interface or packet is `NULL`, return immediately.
+- Interpret `pkt->data` as `ArpPacket`.
+- If `ns_ntohs(opcode) != ARP_OPCODE_REQUEST`, return.
+- If `ns_ntohl(target_protocol_addr) != ns_ntohl(iface->ip_addr)`, return.
+- Call `arp_send_reply(sim, iface, pkt)`.
+- If `iface->arp_cache != NULL`:
+  - compute `sender_ip = ns_ntohl(sender_protocol_addr)`
+  - add sender mapping to the cache
+  - flush pending packets for `sender_ip`
+- If reply send returned `0`, set `iface->last_tx_time = e->timestamp`.
+- Otherwise increment `iface->tx_errors` and set `last_error_time`.
+
+Current implementation note: the handler does not check packet length before
+casting `pkt->data` to `ArpPacket`.
+
+### `arp_reply_handler`
+
+This function is static inside `arp.c`.
+
+Required behavior when invoked by the scheduler:
+
+- Interpret `ctx` as `Simulator *`.
+- Read receiving interface from `e->dst_device`.
+- Read packet from `e->packet`.
+- If interface or packet is `NULL`, return immediately.
+- Interpret `pkt->data` as `ArpPacket`.
+- If `ns_ntohs(opcode) != ARP_OPCODE_REPLY`, return.
+- If `iface->arp_cache != NULL`:
+  - compute `sender_ip = ns_ntohl(sender_protocol_addr)`
+  - add sender mapping to the cache
+  - flush pending packets for `sender_ip`
+- Set `iface->last_rx_time = e->timestamp`.
+
+Current implementation note: the handler does not verify that the reply target
+IP/MAC is actually this interface before learning the sender.
+
+## Flow Charts
+
+### Send Request
+
+```text
+arp_send_request(sim, iface, target_ip)
+  |
+  +-- reject NULL sim/iface or zero target_ip
+  |
+  +-- create Packet
+  +-- allocate ArpPacket
+  |
+  +-- fill request fields
+  |
+  +-- prepend ARP payload into Packet
+  |
+  +-- ethernet_send(... ETH_BROADCAST, ETHERTYPE_ARP, pkt)
+  |
+  +-- ethernet result >= 0: return 0
+  |
+  +-- ethernet result < 0: return -1
 ```
 
-## Design Notes
+### Handle Request
 
-- **Scheduler handler is protocol dispatch, not ARP ownership.** There is one
-  fallback handler for ARP request and one for ARP reply. Multiple devices can
-  still resolve addresses independently because the event carries the receiving
-  interface, and that interface carries the cache pointer.
-- **Cache ownership is external to ARP.** ARP never frees the cache; it
-  only mutates entries through the borrowed pointer and the ARP cache API.
-- **Param rename:** `arp_send_reply` uses `req_pkt` (not `pkt`) so the
-  ACSL annotation can refer to it without `unbound variable` errors.
-- **Return-code trap:** current `link_transmit` returns `1` for scheduled
-  success, so `ethernet_send` can return `1` on a good send. ARP send
-  helpers should treat non-negative Ethernet return values as send
-  success, or the lower-layer convention should be normalized.
+```text
+arp_request_handler(e, sim)
+  |
+  +-- iface = e->dst_device
+  +-- pkt = e->packet
+  |
+  +-- missing iface/pkt: return
+  |
+  +-- opcode not REQUEST: return
+  |
+  +-- target IP not iface IP: return
+  |
+  +-- arp_send_reply(sim, iface, pkt)
+  |
+  +-- if iface->arp_cache:
+        |
+        +-- learn sender IP -> sender MAC
+        +-- flush pending packets for sender IP
+```
 
-## Implementation Guide
+### Handle Reply
 
-1. `arp_init`: register `EVT_ARP_REQUEST` and `EVT_ARP_REPLY` with the
-   scheduler, using `sim` as handler context.
-2. `arp_send_request`: allocate packet and ARP payload; fill request in
-   network byte order; prepend ARP bytes; send through Ethernet broadcast.
-3. `arp_send_reply`: validate request length before reading; copy sender
-   MAC/IP from request; fill reply; unicast to request sender.
-4. Request/reply handlers should free or transfer packet ownership
-   deliberately. If the current code keeps packets alive, tests should
-   expose and settle that ownership rule.
+```text
+arp_reply_handler(e, sim)
+  |
+  +-- iface = e->dst_device
+  +-- pkt = e->packet
+  |
+  +-- missing iface/pkt: return
+  |
+  +-- opcode not REPLY: return
+  |
+  +-- if iface->arp_cache:
+        |
+        +-- learn sender IP -> sender MAC
+        +-- flush pending packets for sender IP
+  |
+  +-- last_rx_time = e->timestamp
+```
 
-## ACSL Contract Plan
+## ACSL Contracts
 
-- `arp_send_request` / `arp_send_reply`: NULL behaviors return `-1`;
-  valid send behaviors should specify packet construction fields and
-  queue/counter effects through Ethernet.
-- Request/reply handlers: valid ARP request/reply reception updates
-  `iface->arp_cache` through `arp_cache_add`; reply handling also calls
-  `arp_pending_flush`.
+The contracts belong in `arp.h`. The static handlers should be covered by KLEVA
+tests through `arp_init` and scheduled events, or by test-only wrappers if
+needed.
+
+### Shared Predicates
+
+```c
+/*@
+    predicate arp_packet_readable(Packet *pkt) =
+        packet_visible_bytes(pkt) &&
+        pkt->len >= 28;
+
+    predicate arp_request_wire(ArpPacket *arp) =
+        \valid_read(arp) &&
+        arp->hardware_addr_len == 6 &&
+        arp->protocol_addr_len == 4 &&
+        arp->opcode == ns_htons(ARP_OPCODE_REQUEST);
+
+    predicate arp_reply_wire(ArpPacket *arp) =
+        \valid_read(arp) &&
+        arp->hardware_addr_len == 6 &&
+        arp->protocol_addr_len == 4 &&
+        arp->opcode == ns_htons(ARP_OPCODE_REPLY);
+*/
+```
+
+### `arp_init`
+
+```c
+/*@
+    behavior null:
+        assumes sim == \null;
+        assigns \nothing;
+
+    behavior valid:
+        assumes simulator_well_formed(sim);
+        assigns sim->sched->handlers[EVT_ARP_REQUEST],
+                sim->sched->handlers[EVT_ARP_REPLY];
+        ensures sim->sched->handlers[EVT_ARP_REQUEST].ctx == sim;
+        ensures sim->sched->handlers[EVT_ARP_REPLY].ctx == sim;
+
+    complete behaviors;
+    disjoint behaviors;
+*/
+void arp_init(Simulator *sim);
+```
+
+Additional required proof/test property:
+
+- `EVT_ARP_REQUEST` handler function becomes the ARP request handler.
+- `EVT_ARP_REPLY` handler function becomes the ARP reply handler.
+
+### `arp_send_request`
+
+```c
+/*@
+    behavior bad_input:
+        assumes sim == \null || iface == \null || target_ip == 0;
+        assigns \nothing;
+        ensures \result == -1;
+
+    behavior valid:
+        assumes simulator_well_formed(sim);
+        assumes interface_basic_valid(iface);
+        assumes target_ip != 0;
+        assigns sim->sched->eq->events,
+                sim->sched->eq->events[0 .. sim->sched->eq->capacity - 1],
+                sim->sched->eq->count,
+                sim->sched->eq->capacity,
+                iface->tx_bytes,
+                iface->tx_errors,
+                iface->last_tx_time,
+                iface->last_error_time;
+        ensures \result == 0 || \result == -1;
+
+    complete behaviors;
+    disjoint behaviors;
+*/
+int arp_send_request(Simulator *sim,
+                     Interface *iface,
+                     uint32_t target_ip);
+```
+
+Additional required proof/test property:
+
+- Constructed request uses broadcast Ethernet destination.
+- Constructed request opcode is network-order `ARP_OPCODE_REQUEST`.
+- Sender MAC equals `iface->mac`.
+- Sender protocol address equals `iface->ip_addr`.
+- Target hardware address is all zero bytes.
+- Target protocol address equals `target_ip`.
+
+### `arp_send_reply`
+
+```c
+/*@
+    behavior bad_input:
+        assumes sim == \null || iface == \null || req_pkt == \null;
+        assigns \nothing;
+        ensures \result == -1;
+
+    behavior bad_packet:
+        assumes simulator_well_formed(sim);
+        assumes interface_basic_valid(iface);
+        assumes req_pkt != \null;
+        assumes req_pkt->data == \null || req_pkt->len < 28;
+        assigns \nothing;
+        ensures \result == -1;
+
+    behavior valid:
+        assumes simulator_well_formed(sim);
+        assumes interface_basic_valid(iface);
+        assumes arp_packet_readable(req_pkt);
+        assigns sim->sched->eq->events,
+                sim->sched->eq->events[0 .. sim->sched->eq->capacity - 1],
+                sim->sched->eq->count,
+                sim->sched->eq->capacity,
+                iface->tx_bytes,
+                iface->tx_errors,
+                iface->last_tx_time,
+                iface->last_error_time;
+        ensures \result == 0 || \result == -1;
+
+    complete behaviors;
+    disjoint behaviors;
+*/
+int arp_send_reply(Simulator *sim,
+                   Interface *iface,
+                   Packet *req_pkt);
+```
+
+Additional required proof/test property:
+
+- Constructed reply opcode is network-order `ARP_OPCODE_REPLY`.
+- Reply destination MAC equals request sender hardware address.
+- Reply sender MAC equals `iface->mac`.
+- Reply sender protocol address equals `iface->ip_addr`.
+- Reply target protocol address equals request sender protocol address.
+
+## KLEVA Verification Plan
+
+Minimum KLEVA tests:
+
+1. `arp_init(NULL)` does not crash.
+2. `arp_init(valid)` registers request handler context as `sim`.
+3. `arp_init(valid)` registers reply handler context as `sim`.
+4. `arp_send_request` rejects NULL simulator, NULL interface, and zero target.
+5. Request allocation failure returns `-1` and frees partial allocation.
+6. Request construction writes hardware type in network order.
+7. Request construction writes protocol type in network order.
+8. Request construction writes opcode request in network order.
+9. Request construction copies interface MAC into sender hardware address.
+10. Request construction stores interface IP as sender protocol address.
+11. Request construction zeroes target hardware address.
+12. Request construction stores target IP exactly as provided.
+13. Request send uses Ethernet broadcast destination.
+14. Request send normalizes non-negative Ethernet result to return `0`.
+15. `arp_send_reply` rejects NULL simulator, interface, or request packet.
+16. `arp_send_reply` rejects NULL request data.
+17. `arp_send_reply` rejects request shorter than 28 bytes.
+18. Reply construction writes opcode reply in network order.
+19. Reply construction copies request sender MAC into target hardware address.
+20. Reply construction sends Ethernet unicast to request sender MAC.
+21. Reply construction stores interface MAC/IP as sender fields.
+22. Reply send normalizes non-negative Ethernet result to return `0`.
+23. Request handler ignores missing interface or packet.
+24. Request handler ignores non-request opcode.
+25. Request handler ignores target IP not matching receiving interface.
+26. Request handler sends reply for matching request.
+27. Request handler learns sender mapping when `iface->arp_cache` exists.
+28. Request handler flushes pending packets for learned sender IP.
+29. Reply handler ignores missing interface or packet.
+30. Reply handler ignores non-reply opcode.
+31. Reply handler learns sender mapping when `iface->arp_cache` exists.
+32. Reply handler flushes pending packets for learned sender IP.
+33. Reply handler updates `last_rx_time`.
+
+## Common Mistakes
+
+- Do not say ARP owns the ARP cache object.
+- Do not make Interface own or free the ARP cache.
+- Do not call ARP handlers directly from outside `arp.c`; they are static.
+- Do not forget that `arp_send_request` expects `target_ip` in the same wire
+  order convention as `iface->ip_addr`.
+- Do not treat Ethernet success `1` as ARP failure; ARP helpers normalize
+  non-negative Ethernet results to `0`.
+- Do not hide the current packet ownership issue after ARP send helpers call
+  `ethernet_send`.
+- Do not claim handlers validate packet length; current static handlers do not.

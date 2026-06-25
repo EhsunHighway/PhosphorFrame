@@ -106,7 +106,9 @@ Device   *topology_find_device_by_ip(const Topology *topo, uint32_t ip_addr) {
     return NULL;
 }
 
-Link     *topology_get_link_between(const Topology *topo, const Interface *iface_a, const Interface *iface_b) {
+Link     *topology_get_link_between(const Topology  *topo,
+                                    const Interface *iface_a,
+                                    const Interface *iface_b) {
     if (!topo || !iface_a || !iface_b) {
         return NULL;
     }
@@ -137,4 +139,3 @@ int       topology_link_count(const Topology *topo) {
 
     return topo->link_count;
 }
-

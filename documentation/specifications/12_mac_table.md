@@ -1,227 +1,570 @@
-# Module 12 — MAC Table
+# Module 12 - MAC Table
 
 **Files:** `src/network/mac_table.c`, `src/network/mac_table.h`
-**Status:** ✅ Implemented
-**Depends on:** interface
+**Status:** Implemented
+**Depends on:** `interface`
 
----
+## Concepts First
 
-## The Problem
+A switch receives Ethernet frames on ports. To forward a unicast frame
+efficiently, it needs to know:
 
-A switch learns *which port a MAC address lives on* by observing the
-source MAC of every arriving frame. That knowledge lives in the MAC
-Table (a.k.a. CAM table / forwarding database). The switch consults it
-on every received frame to choose between:
-
-- **Unicast forward** — exactly one known outgoing port.
-- **Flood** — unknown destination; copy to every port except the one
-  the frame arrived on.
-
-Entries must expire to handle host moves. This module is **pure data
-structure** — no events, no I/O.
-
-## Mental Model
-
-```
-   MacTable (1 per Switch)
-   ┌───────────────────────────────────────────────────────┐
-   │  capacity = MAC_TABLE_SIZE (1024)                     │
-   │  count    = 3  (entries in use)                       │
-   │  age_ms   = MAC_AGE_MS     (300 000 ms = 5 min)       │
-   │                                                       │
-   │  entries[0]: AA:BB:CC:11:22:33 → port=eth0 ts=400 000 │
-   │  entries[1]: DD:EE:FF:44:55:66 → port=eth1 ts=410 000 │
-   │  entries[2]: 11:22:33:AA:BB:CC → port=eth2 ts=380 000 │
-   │  entries[3..1023]: valid=0                            │
-   └───────────────────────────────────────────────────────┘
+```text
+Which port leads to this destination MAC address?
 ```
 
----
+The MAC table stores that learned mapping:
 
-## Header File — `mac_table.h`
+```text
+MAC address -> Interface *
+```
+
+This table is also called:
+
+- CAM table
+- forwarding database
+- bridge forwarding table
+
+### Learning
+
+Switches learn from source MAC addresses.
+
+When a frame arrives on port `P` with source MAC `AA:AA:AA:AA:AA:AA`, the
+switch can learn:
+
+```text
+AA:AA:AA:AA:AA:AA is reachable through port P
+```
+
+If the same MAC is seen later on another port, the table updates the port. That
+models a host moving or a topology change.
+
+### Lookup
+
+When the switch sees a destination MAC:
+
+- if the MAC table has an entry, forward only to that port
+- if the MAC table has no entry, flood to all eligible ports except ingress
+
+The MAC table module only performs lookup. The switch module decides whether to
+forward or flood.
+
+### Aging
+
+Learned MAC locations can become stale. A host can move or disconnect.
+
+Each entry stores a timestamp. `mac_table_age(table, now)` invalidates entries
+whose age is greater than `MAC_AGE_MS`.
+
+Current implementation uses:
+
+```c
+now - timestamp > MAC_AGE_MS
+```
+
+So an entry whose age is exactly `300000` remains valid; it expires only when
+the age is greater than `300000`.
+
+### Holes In The Table
+
+The table is a fixed array of 1024 entries. Aging and flush operations mark
+entries invalid; they do not compact the array.
+
+That means valid entries may be anywhere in:
+
+```text
+entries[0 .. 1023]
+```
+
+All operations must scan the full array. Do not scan only `0 .. count - 1`.
+
+### Borrowed Ports
+
+Each MAC entry stores an `Interface *port`.
+
+The MAC table does not own that interface. It never frees ports. If a port is
+removed, switch code should call `mac_table_flush_port` before the interface is
+freed.
+
+## Purpose
+
+The MAC table module is a bounded data structure for switch learning.
+
+It provides:
+
+- table initialization
+- MAC learning/update
+- MAC lookup
+- aging of stale entries
+- flushing entries for one port
+
+It does not:
+
+- parse Ethernet frames
+- transmit packets
+- flood packets
+- own interfaces
+- allocate table storage
+- run its own timer
+- schedule events
+
+## Architecture Boundary
+
+| Responsibility | Owner |
+| --- | --- |
+| Store learned MAC-to-port mappings | MAC table |
+| Decide when to learn source MAC | Switch |
+| Decide whether to forward or flood | Switch |
+| Own switch ports/interfaces | Device/Switch |
+| Own MAC table storage | Switch |
+| Trigger periodic aging | Switch timer/event code |
+| Free interfaces | Device/Switch, not MAC table |
+
+MAC table is pure data structure code. It should not include scheduler,
+simulator, Ethernet, packet, or switch behavior.
+
+Current `mac_table.c` includes `simulator.h`, but the implementation does not
+use simulator APIs. That include is unnecessary for the module boundary.
+
+## Data Model
 
 ### Constants
 
-| Macro              | Value       | Use                              |
-|--------------------|-------------|----------------------------------|
-| `MAC_TABLE_SIZE`   | `1024`      | Fixed capacity (ACSL: literal)   |
-| `MAC_AGE_MS`       | `300000`    | Entry lifetime in ms             |
-| `MAC_ADDR_LEN`     | `6`         | Bytes per MAC                    |
+```c
+#define MAC_TABLE_SIZE 1024
+#define MAC_AGE_MS     300000
+#define MAC_ADDR_LEN   6
+```
 
-### `MacEntry` Struct (32 bytes)
+### `MacEntry`
 
 ```c
 typedef struct MacEntry {
-    uint8_t    mac[6];      // 6 B — learned source MAC
-    uint8_t    _pad[2];     // 2 B — align next field to 8
-    Interface *port;        // 8 B — egress NIC (borrowed, not owned)
-    uint64_t   timestamp;   // 8 B — time of last learn (ms)
-    int        valid;       // 4 B
-    int        _pad2;       // 4 B — align struct to 8
-} MacEntry;                 // total: 32 bytes
+    uint8_t    mac[MAC_ADDR_LEN];
+    uint8_t    _pad[2];
+    Interface *port;
+    uint64_t   timestamp;
+    int        valid;
+    int        _pad2;
+} MacEntry;
 ```
 
-### `MacTable` Struct (32 776 bytes — embedded in Switch)
+Field meanings:
+
+| Field | Meaning |
+| --- | --- |
+| `mac` | Learned six-byte MAC address. |
+| `_pad` | Padding for alignment. |
+| `port` | Borrowed egress/learned interface pointer. |
+| `timestamp` | Time when the MAC was last learned/refreshed. |
+| `valid` | `1` means active entry; `0` means empty/stale slot. |
+| `_pad2` | Padding for alignment. |
+
+### `MacTable`
 
 ```c
 typedef struct MacTable {
-    MacEntry entries[1024]; // 32 768 B (1024 × 32)
-    int      count;         //      4 B — valid entries in use
-    int      _pad;          //      4 B
+    MacEntry entries[MAC_TABLE_SIZE];
+    int      count;
+    int      _pad;
 } MacTable;
 ```
 
-`MacTable` is embedded directly in `Switch` — no malloc, no NULL guard.
+`count` is the number of valid entries.
 
-### Public API
+The implementation does not maintain entries compactly.
 
-| Function                              | Purpose                                          |
-|---------------------------------------|--------------------------------------------------|
-| `mac_table_init(tbl)`                 | Zero-fill; count = 0.                            |
-| `mac_table_learn(tbl, mac, port, now)`| Insert new entry or refresh ts if already known. |
-| `mac_table_lookup(tbl, mac)`          | Return `Interface *` or NULL.                    |
-| `mac_table_age(tbl, now)`             | Invalidate entries where `now - ts > MAC_AGE_MS`.|
-| `mac_table_flush_port(tbl, port)`     | Remove all entries pointing at `port`.           |
+## Ownership And Lifetime
 
+The MAC table module does not allocate or free `MacTable`.
 
-mac_table_lookup (hit):
-  result != NULL ⇒ ∃ i: entries[i].valid && memcmp(entries[i].mac, mac, 6) == 0
+`mac_table_init` initializes existing storage.
 
-mac_table_lookup (miss):
-  result == NULL ⇒ ∀ i: !entries[i].valid || memcmp(entries[i].mac, mac, 6) != 0
+`MacEntry.port` is borrowed. The table does not own or free it.
 
-mac_table_age postcondition:
-  ∀ i: entries[i].valid ⇒ (now - entries[i].timestamp) < 300000
+When `mac_table_learn` succeeds, it returns a pointer into the table:
+
+```text
+&table->entries[i]
 ```
 
----
+The caller must not free that pointer.
 
-## Timer Event — Aging event
-
-```
-event_create_callback(EVT_MAC_AGE,
-                      now + SW_AGE_INTERVAL,
-                      NULL, NULL, NULL, NULL,
-                      mac_age_handler,
-                      sw)
-```
-
-`mac_age_handler` is stored on each aging event with that event's
-`Switch *` context. It calls `mac_table_age` then reschedules itself
-`SW_AGE_INTERVAL` ms into the future with another callback event.
-
----
-
-## Function Call Sequence — Frame arrives at switch port P
-
-```
-ethernet_receive_event(e, sim):
-   └─► ethernet_receive(iface_P, frame, &ethertype)
-           │   (strip L2; MAC check is already done vs iface_P->mac)
-           ▼
-       switch_receive(sw, iface_P, frame, ethertype):
-           │
-           ├─► mac_table_learn(sw->mac_tbl, src_mac, iface_P, now)
-           │       for i in 0..count: if mac[i] matches → update ts, return 0
-           │       else: entries[count++] = {src_mac, iface_P, now, valid=1}
-           │
-           ├─► egress = mac_table_lookup(sw->mac_tbl, dst_mac)
-           │       for i in 0..count: if valid && mac[i] matches → return port
-           │       else: return NULL
-           │
-           ├─ if egress && egress != iface_P:
-           │       └─► ethernet_send(sim, egress, dst_mac, ethertype, frame)
-           │               └─► link_transmit(...)
-           │
-           └─ else (flood):
-                   for each port in sw->interfaces except iface_P:
-                       packet_copy(frame)
-                       └─► ethernet_send(sim, port, dst_mac, ethertype, copy)
-```
-
-## Function Call Sequence — Aging
-
-```
-mac_age_handler(e, ctx):          (fires every 30 000 ms)
-   ├─► mac_table_age(sw->mac_tbl, sched->now)
-   │       for i in 0..capacity:
-   │           if entries[i].valid && (now - entries[i].timestamp) > 300000:
-   │               entries[i].valid = 0
-   │               count--
-   │
-   └─► event_create_callback(EVT_MAC_AGE,
-                             now + SW_AGE_INTERVAL,
-                             NULL, NULL, NULL, NULL,
-                             mac_age_handler, sw)
-       scheduler_schedule(sched, e)        ← reschedule itself
-```
-
----
-
-## Design Notes
-
-- **Fixed array, no realloc.** 1024 entries × 32 bytes = 32 KB — fits
-  in L1/L2 on any modern CPU. Full-table linear scan is ~1 µs.
-- **Entries never shrink the array** — they are just invalidated. The
-  `count` field tracks valid entries.
-- **`port` is a borrowed pointer.** `mac_table_flush_port` is called by
-  `switch_port_down` before an interface is freed.
-- **ACSL literal 1024, not `MAC_TABLE_SIZE`** — EVA cannot evaluate
-  C macros inside annotations (same lesson as ARP cache).
-- **Aging is eventually consistent** — in the worst case an entry lives
-  up to `MAC_AGE_MS + 30_000 ms` before being swept.
-
-## Test Plan (kleva)
-
-- `learn_new`, `learn_update_port`, `learn_table_full`
-- `lookup_hit`, `lookup_miss`, `lookup_after_age_expires`
-- `age_keeps_fresh_entry`, `age_removes_stale`
-- `flush_port_removes_entries`, `flush_port_leaves_others`
-- NULL guards: `learn_null_tbl`, `lookup_null_mac`, `age_null_tbl`
-
-## Implementation Guide
-
-1. `mac_table_init`: `memset` the whole table to zero. `count` must be
-   zero and every entry invalid.
-2. `mac_table_learn`: reject NULLs; scan the full fixed table for an
-   existing valid MAC and refresh `port`/`timestamp` without changing
-   count; otherwise fill the first invalid slot, mark valid, increment
-   count; return NULL only when invalid input or full table.
-3. `mac_table_lookup`: reject NULLs; scan all entries; return the
-   borrowed `Interface *` for the first valid MAC match.
-4. `mac_table_age`: invalidate entries where `now - timestamp >
-   MAC_AGE_MS`; decrement count for each invalidated entry.
-5. `mac_table_flush_port`: invalidate all entries pointing at the given
-   port and decrement count for each.
-
-Implementation traps:
-
-- Do not scan only `0 .. count - 1`; aging and flush leave holes.
-- Count must never go below zero. Decrement only when changing an entry
-  from valid to invalid.
-- `port` is borrowed. The table never frees interfaces.
-
-## ACSL Contract Plan
-
-Useful predicates:
+## Public API
 
 ```c
-/*@ predicate mac_eq{L}(uint8_t *a, uint8_t *b) =
-      \forall integer i; 0 <= i < 6 ==> a[i] == b[i];
+void        mac_table_init(MacTable *table);
 
-    predicate mac_table_count_ok{L}(MacTable *table) =
-      table->count ==
-        \numof(integer i; 0 <= i < 1024 && table->entries[i].valid == 1);
+MacEntry   *mac_table_learn(MacTable      *table,
+                            const uint8_t  mac[6],
+                            Interface     *port,
+                            uint64_t       now);
+
+Interface  *mac_table_lookup(MacTable *table,
+                             const uint8_t mac[6]);
+
+void        mac_table_age(MacTable *table, uint64_t now);
+
+void        mac_table_flush_port(MacTable *table, Interface *port);
+```
+
+## Function Behavior
+
+### `mac_table_init`
+
+Required behavior:
+
+- If `table == NULL`, return immediately.
+- Clear the whole `MacTable` object.
+- Set `count == 0`.
+- Mark every entry invalid.
+
+Current implementation uses `memset(table, 0, sizeof(MacTable))`.
+
+### `mac_table_learn`
+
+Required behavior:
+
+- If `table == NULL`, return `NULL`.
+- If `mac == NULL`, return `NULL`.
+- If `port == NULL`, return `NULL`.
+- Scan all 1024 entries for a valid entry whose MAC matches all six bytes.
+- If found:
+  - update `port`
+  - update `timestamp`
+  - leave `count` unchanged
+  - return pointer to that entry
+- Otherwise, scan all 1024 entries for the first invalid slot.
+- If found:
+  - copy all six MAC bytes
+  - store borrowed `port`
+  - store `timestamp = now`
+  - set `valid = 1`
+  - increment `count`
+  - return pointer to that entry
+- If no invalid slot exists, return `NULL`.
+
+### `mac_table_lookup`
+
+Required behavior:
+
+- If `table == NULL`, return `NULL`.
+- If `mac == NULL`, return `NULL`.
+- Scan all 1024 entries.
+- If a valid entry matches all six MAC bytes, return its `port`.
+- If no match exists, return `NULL`.
+
+The returned `Interface *` is borrowed from the table entry.
+
+### `mac_table_age`
+
+Required behavior:
+
+- If `table == NULL`, return immediately.
+- Scan all 1024 entries.
+- For each valid entry where:
+
+```text
+now - entry.timestamp > MAC_AGE_MS
+```
+
+  - set `valid = 0`
+  - decrement `count`
+
+The current implementation does not clear `port` or MAC bytes when aging an
+entry. The `valid` bit is the authority.
+
+The current implementation does not guard against unsigned timestamp
+wraparound.
+
+### `mac_table_flush_port`
+
+Required behavior:
+
+- If `table == NULL`, return immediately.
+- If `port == NULL`, return immediately.
+- Scan all 1024 entries.
+- For each valid entry whose `entry.port == port`:
+  - set `valid = 0`
+  - decrement `count`
+
+The current implementation does not clear `entry.port` after invalidation. The
+`valid` bit is the authority.
+
+## Flow Charts
+
+### Learn
+
+```text
+mac_table_learn(table, mac, port, now)
+  |
+  +-- reject NULL inputs
+  |
+  +-- scan all entries for valid matching MAC
+  |     |
+  |     +-- found:
+  |          update port and timestamp
+  |          return entry
+  |
+  +-- scan all entries for first invalid slot
+        |
+        +-- found:
+        |     copy MAC
+        |     store port and timestamp
+        |     valid = 1
+        |     count++
+        |     return entry
+        |
+        +-- none:
+              return NULL
+```
+
+### Lookup
+
+```text
+mac_table_lookup(table, mac)
+  |
+  +-- reject NULL inputs
+  |
+  +-- scan all entries
+        |
+        +-- valid matching MAC: return entry.port
+  |
+  +-- return NULL
+```
+
+### Age
+
+```text
+mac_table_age(table, now)
+  |
+  +-- NULL table: return
+  |
+  +-- for each entry:
+        |
+        +-- valid and now - timestamp > 300000:
+              valid = 0
+              count--
+```
+
+## ACSL Contracts
+
+The contracts belong in `mac_table.h`. Use literal bounds in annotations:
+
+- table entries: `0 .. 1023`
+- MAC bytes: `0 .. 5`
+
+### Shared Predicates
+
+```c
+/*@
+    predicate mac_bytes_equal(uint8_t *a, uint8_t *b) =
+        \valid_read(a + (0 .. 5)) &&
+        \valid_read(b + (0 .. 5)) &&
+        a[0] == b[0] &&
+        a[1] == b[1] &&
+        a[2] == b[2] &&
+        a[3] == b[3] &&
+        a[4] == b[4] &&
+        a[5] == b[5];
+
+    predicate mac_table_count_valid(MacTable *table) =
+        0 <= table->count && table->count <= 1024;
+
+    predicate mac_table_slots_valid(MacTable *table) =
+        \forall integer i; 0 <= i && i < 1024 ==>
+            (table->entries[i].valid == 0 ||
+             (table->entries[i].valid == 1 &&
+              table->entries[i].port != \null));
+
+    predicate mac_table_well_formed(MacTable *table) =
+        \valid(table) &&
+        mac_table_count_valid(table) &&
+        mac_table_slots_valid(table);
 */
 ```
 
-Contract targets:
+### `mac_table_init`
 
-- `mac_table_learn`: update behavior preserves count; insert behavior
-  increments count; full behavior returns NULL and leaves table state
-  unchanged.
-- `mac_table_lookup`: hit result equals the port of a valid matching
-  entry; miss proves no valid matching entry exists.
-- `mac_table_age`: after return, every valid entry is fresh enough.
-- `mac_table_flush_port`: after return, no valid entry references the
-  flushed port and unrelated entries preserve validity.
+```c
+/*@
+    behavior null:
+        assumes table == \null;
+        assigns \nothing;
+
+    behavior valid:
+        assumes \valid(table);
+        assigns table->entries[0 .. 1023],
+                table->count;
+        ensures table->count == 0;
+        ensures \forall integer i; 0 <= i && i < 1024 ==>
+                table->entries[i].valid == 0;
+        ensures mac_table_well_formed(table);
+
+    complete behaviors;
+    disjoint behaviors;
+*/
+void mac_table_init(MacTable *table);
+```
+
+### `mac_table_learn`
+
+```c
+/*@
+    behavior bad_input:
+        assumes table == \null || mac == \null || port == \null;
+        assigns \nothing;
+        ensures \result == \null;
+
+    behavior valid:
+        assumes mac_table_well_formed(table);
+        assumes \valid_read(mac + (0 .. 5));
+        assumes \valid(port);
+        assigns table->entries[0 .. 1023],
+                table->count;
+        ensures \result == \null ||
+                (\exists integer i; 0 <= i && i < 1024 &&
+                    \result == &table->entries[i] &&
+                    table->entries[i].valid == 1 &&
+                    table->entries[i].port == port &&
+                    table->entries[i].timestamp == now);
+        ensures \result == \null ||
+                table->count == \old(table->count) ||
+                table->count == \old(table->count) + 1;
+        ensures mac_table_well_formed(table);
+
+    complete behaviors;
+    disjoint behaviors;
+*/
+MacEntry *mac_table_learn(MacTable *table,
+                          const uint8_t mac[6],
+                          Interface *port,
+                          uint64_t now);
+```
+
+Additional required proof/test property:
+
+- Updating an existing MAC leaves `count` unchanged.
+- Inserting a new MAC increments `count`.
+- Full-table miss returns `NULL` and leaves `count` unchanged.
+- On non-null result, `result->mac[0 .. 5]` equals `mac[0 .. 5]`.
+
+### `mac_table_lookup`
+
+```c
+/*@
+    behavior bad_input:
+        assumes table == \null || mac == \null;
+        assigns \nothing;
+        ensures \result == \null;
+
+    behavior valid:
+        assumes mac_table_well_formed(table);
+        assumes \valid_read(mac + (0 .. 5));
+        assigns \nothing;
+        ensures \result == \null ||
+                (\exists integer i; 0 <= i && i < 1024 &&
+                    table->entries[i].valid == 1 &&
+                    table->entries[i].port == \result);
+
+    complete behaviors;
+    disjoint behaviors;
+*/
+Interface *mac_table_lookup(MacTable *table, const uint8_t mac[6]);
+```
+
+Additional required proof/test property:
+
+- A non-null result belongs to a valid matching MAC entry.
+- A null result means no valid entry matches all six MAC bytes.
+
+### `mac_table_age`
+
+```c
+/*@
+    behavior null:
+        assumes table == \null;
+        assigns \nothing;
+
+    behavior valid:
+        assumes mac_table_well_formed(table);
+        assigns table->entries[0 .. 1023],
+                table->count;
+        ensures table->count <= \old(table->count);
+        ensures \forall integer i; 0 <= i && i < 1024 ==>
+                (table->entries[i].valid == 0 ||
+                 now - table->entries[i].timestamp <= 300000);
+        ensures mac_table_well_formed(table);
+
+    complete behaviors;
+    disjoint behaviors;
+*/
+void mac_table_age(MacTable *table, uint64_t now);
+```
+
+### `mac_table_flush_port`
+
+```c
+/*@
+    behavior null:
+        assumes table == \null || port == \null;
+        assigns \nothing;
+
+    behavior valid:
+        assumes mac_table_well_formed(table);
+        assumes \valid(port);
+        assigns table->entries[0 .. 1023],
+                table->count;
+        ensures table->count <= \old(table->count);
+        ensures \forall integer i; 0 <= i && i < 1024 ==>
+                (table->entries[i].valid == 0 ||
+                 table->entries[i].port != port);
+        ensures mac_table_well_formed(table);
+
+    complete behaviors;
+    disjoint behaviors;
+*/
+void mac_table_flush_port(MacTable *table, Interface *port);
+```
+
+## KLEVA Verification Plan
+
+Minimum KLEVA tests:
+
+1. `mac_table_init(NULL)` does not crash.
+2. `mac_table_init(valid)` sets `count == 0`.
+3. `mac_table_init(valid)` clears all 1024 valid bits.
+4. `mac_table_learn` rejects NULL table, MAC, or port.
+5. Learning a new MAC returns a non-null entry.
+6. New learn copies all six MAC bytes.
+7. New learn stores port and timestamp.
+8. New learn increments count.
+9. Learning existing MAC updates port.
+10. Learning existing MAC updates timestamp.
+11. Learning existing MAC does not increment count.
+12. Learning into a full table with no matching MAC returns `NULL`.
+13. Full-table learn failure leaves count unchanged.
+14. `mac_table_lookup` rejects NULL table or MAC.
+15. Lookup hit returns learned port.
+16. Lookup miss returns `NULL`.
+17. Lookup ignores invalid entries.
+18. `mac_table_age(NULL, now)` does not crash.
+19. Aging removes entries with age greater than `300000`.
+20. Aging keeps entries with age equal to `300000`.
+21. Aging keeps fresh entries.
+22. Aging decrements count for each invalidated entry.
+23. `mac_table_flush_port(NULL, port)` does not crash.
+24. `mac_table_flush_port(table, NULL)` does not crash.
+25. Flush invalidates entries pointing at the port.
+26. Flush leaves entries for other ports valid.
+27. Flush decrements count for each invalidated entry.
+
+## Common Mistakes
+
+- Do not scan only `0 .. count - 1`; holes are possible.
+- Do not free `Interface *port`; it is borrowed.
+- Do not say age expires entries at `>= 300000`; current code uses `> 300000`.
+- Do not require invalidated entries to clear MAC or port; current code only
+  clears `valid`.
+- Do not put switch flooding or Ethernet parsing in this module.
+- Do not assume `count` gives an insertion index.

@@ -57,7 +57,9 @@ Packet  *packet_create(size_t capacity);
     complete behaviors ok, no_headroom;
     disjoint behaviors ok, no_headroom;
 */
-int      packet_prepend(Packet *p, const void *header, size_t header_len); 
+int      packet_prepend(Packet     *p,
+                        const void *header,
+                        size_t      header_len);
 
 /*@
   requires \valid(p);

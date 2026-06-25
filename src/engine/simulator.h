@@ -115,7 +115,11 @@ uint64_t   simulator_now(const Simulator *sim);
     complete behaviors;
     disjoint behaviors;
 */
-int        simulator_inject_packet(Simulator *sim, Device *src, Device *dst, Packet *pkt, uint64_t delay_us);
+int        simulator_inject_packet(Simulator *sim,
+                                   Device    *src,
+                                   Device    *dst,
+                                   Packet    *pkt,
+                                   uint64_t   delay_us);
 
 /*@
     behavior null:
@@ -129,6 +133,9 @@ int        simulator_inject_packet(Simulator *sim, Device *src, Device *dst, Pac
     complete behaviors;
     disjoint behaviors;
 */
-void       simulator_register_handler(Simulator *sim, EventType type, EventHandler fn, void *ctx);                              
+void       simulator_register_handler(Simulator   *sim,
+                                      EventType    type,
+                                      EventHandler fn,
+                                      void        *ctx);
 
 #endif /* SIMULATOR_H */

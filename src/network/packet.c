@@ -37,7 +37,9 @@ void packet_free(Packet *p) {
     free(p);
 }
 
-int packet_prepend(Packet *p, const void *header, size_t header_len) {
+int packet_prepend(Packet     *p,
+                   const void *header,
+                   size_t      header_len) {
     // Check there is enough headroom before data to fit the new header
     if ((size_t)(p->data - p->head) < header_len) {
         return -1;
@@ -97,7 +99,10 @@ uint16_t packet_checksum(const void *data, size_t len) {
 }
 
 void packet_dump(const Packet *p) {
-    printf("Packet ID: %d, Length: %zu, Layer: %d\n", p->id ,p->len, p->layer);
+    printf("Packet ID: %d, Length: %zu, Layer: %d\n",
+           p->id,
+           p->len,
+           p->layer);
     printf("Data:\n");
     for (int i = 0;i < (int)p->len;i++) {
         printf("%02X ", p->data[i]);

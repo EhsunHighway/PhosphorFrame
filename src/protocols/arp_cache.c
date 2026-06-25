@@ -60,13 +60,13 @@ int arp_cache_lookup(const ArpCache *cache,
     return -1;
 }
 
-int arp_pending_enqueue(ArpCache *cache,
+int arp_pending_enqueue(ArpCache  *cache,
                         Interface *iface,
-                        uint32_t target_ip,
-                        uint32_t src_ip,
-                        uint32_t dst_ip,
-                        uint8_t protocol,
-                        Packet *payload) {
+                        uint32_t   target_ip,
+                        uint32_t   src_ip,
+                        uint32_t   dst_ip,
+                        uint8_t    protocol,
+                        Packet    *payload) {
     if (!cache || !iface || !target_ip || !payload) {
         return -1;
     }
@@ -74,12 +74,12 @@ int arp_pending_enqueue(ArpCache *cache,
     for (int i = 0; i < ARP_MAX_PENDING_PACKETS; i++) {
         if (cache->pending[i].valid == 0) {
             cache->pending[i].target_ip = target_ip;
-            cache->pending[i].src_ip = src_ip;
-            cache->pending[i].dst_ip = dst_ip;
-            cache->pending[i].protocol = protocol;
-            cache->pending[i].iface = iface;
-            cache->pending[i].payload = payload;
-            cache->pending[i].valid = 1;
+            cache->pending[i].src_ip    = src_ip;
+            cache->pending[i].dst_ip    = dst_ip;
+            cache->pending[i].protocol  = protocol;
+            cache->pending[i].iface     = iface;
+            cache->pending[i].payload   = payload;
+            cache->pending[i].valid     = 1;
             cache->pending_count++;
             return 0;
         }
@@ -117,7 +117,13 @@ int arp_pending_flush(Simulator    *sim,
         }
 
         if (iface && payload &&
-            ip_send(sim, iface, (uint8_t *)mac_addr, src_ip, dst_ip, protocol, payload) >= 0) {
+            ip_send(sim,
+                    iface,
+                    (uint8_t *)mac_addr,
+                    src_ip,
+                    dst_ip,
+                    protocol,
+                    payload) >= 0) {
             sent++;
         } else {
             packet_free(payload);

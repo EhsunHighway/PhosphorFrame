@@ -46,13 +46,13 @@ typedef enum {
     // NAT
     EVT_NAT_GC,
     // sentinel — handler table size **must be last**
-    EVT_TYPE_COUNT        
+    EVT_TYPE_COUNT
 } EventType;
 
 struct Event {
     EventType     type;
     uint64_t      timestamp;     // simulated microseconds
-    void         *src_device;    // pointer to source device 
+    void         *src_device;    // pointer to source device
     void         *dst_device;    // pointer to destination device
     void         *packet;        // Packet* — void* to avoid circular include
     void         *data;          // protocol-specific extra payload
@@ -80,7 +80,7 @@ EventQueue *event_queue_create(size_t capacity);
 
 void        event_queue_free(EventQueue *eq);
 
-/*@ 
+/*@
     requires \valid(eq);
     requires \valid(e);
     assigns eq->events, eq->count;
@@ -89,7 +89,7 @@ void        event_queue_free(EventQueue *eq);
 */
 int         event_queue_push(EventQueue *eq, Event *e);
 
-/*@    
+/*@
     requires \valid(eq);
     assigns eq->events, eq->count;
     ensures \result != \null ==> eq->count == \old(eq->count) - 1;
@@ -117,12 +117,12 @@ int         event_queue_is_empty(const EventQueue *eq);
     ensures \result != \null ==> \result->handler == \null;
     ensures \result != \null ==> \result->handler_ctx == \null;
 */
-Event      *event_create(EventType type, 
-                         uint64_t timestamp, 
-                         void *src, 
-                         void *dst, 
-                         void *packet, 
-                         void *data);
+Event      *event_create(EventType  type,
+                         uint64_t   timestamp,
+                         void      *src,
+                         void      *dst,
+                         void      *packet,
+                         void      *data);
 
 /*@
     allocates \result;
@@ -130,14 +130,14 @@ Event      *event_create(EventType type,
     ensures \result != \null ==> \result->handler == handler;
     ensures \result != \null ==> \result->handler_ctx == handler_ctx;
 */
-Event      *event_create_callback(EventType type, 
-                                  uint64_t timestamp,
-                                  void *src, 
-                                  void *dst, 
-                                  void *packet, 
-                                  void *data,
-                                  EventCallback handler, 
-                                  void *handler_ctx);
+Event      *event_create_callback(EventType     type,
+                                  uint64_t      timestamp,
+                                  void         *src,
+                                  void         *dst,
+                                  void         *packet,
+                                  void         *data,
+                                  EventCallback handler,
+                                  void         *handler_ctx);
 
 void        event_free(Event *e);
 

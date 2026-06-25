@@ -60,7 +60,10 @@ void       scheduler_free(Scheduler *s);
     complete behaviors;
     disjoint behaviors;
 */
-void       scheduler_register(Scheduler *s, EventType type, EventHandler fn, void *ctx);
+void       scheduler_register(Scheduler    *s,
+                              EventType     type,
+                              EventHandler  fn,
+                              void         *ctx);
 
 /*@
     behavior null:

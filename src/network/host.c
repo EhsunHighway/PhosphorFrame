@@ -4,7 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-Host *host_create(const char *name, Simulator *sim, uint32_t gateway_ip) {
+Host *host_create(const char *name,
+                  Simulator  *sim,
+                  uint32_t    gateway_ip) {
     if (name == NULL || sim == NULL) {
         return NULL;
     }
@@ -52,8 +54,45 @@ Host *host_create(const char *name, Simulator *sim, uint32_t gateway_ip) {
     }
     tcp_init(host->tcp_table);
 
-    host->udp_context =
+    host->udp_context = malloc(sizeof(UdpContext));
+    if (!host->udp_context) {
+        free(host->tcp_table);
+        free(host->udp_state);
+        ip_stack_free(host->ip_stack);
+        arp_cache_free(host->arp_cache);
+        host_free(host);
+        return NULL;
+    }
+    host->udp_context->sim   = sim;
+    host->udp_context->state = host->udp_state;
 
+    host->tcp_context = malloc(sizeof(TcpContext));
+    if (!host->tcp_context) {
+        free(host->udp_context);
+        free(host->tcp_table);
+        free(host->udp_state);
+        ip_stack_free(host->ip_stack);
+        arp_cache_free(host->arp_cache);
+        host_free(host);
+        return NULL;
+    }
+    host->tcp_context->sim   = sim;
+    host->tcp_context->table = host->tcp_table;
+
+    ip_stack_register_protocol(host->ip_stack,
+                               IPPROTO_ICMP,
+                               icmp_receive,
+                               sim);
+
+    ip_stack_register_protocol(host->ip_stack,
+                               IPPROTO_UDP,
+                               udp_receive,
+                               host->udp_context);
+
+    ip_stack_register_protocol(host->ip_stack,
+                               IPPROTO_TCP,
+                               tcp_receive,
+                               host->tcp_context);
 
     host->gateway_ip       = gateway_ip;
     return host;

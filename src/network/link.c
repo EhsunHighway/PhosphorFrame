@@ -2,11 +2,11 @@
 #include "link.h"
 #include "../engine/scheduler.h"
 
-Link      *link_create(Interface *end_a, 
-                       Interface *end_b, 
-                       uint32_t bw, 
-                       uint32_t delay, 
-                       float loss_rate) {
+Link      *link_create(Interface *end_a,
+                       Interface *end_b,
+                       uint32_t   bw,
+                       uint32_t   delay,
+                       float      loss_rate) {
     if (!end_a || !end_b || bw == 0) {
         return NULL;
     }
@@ -21,7 +21,7 @@ Link      *link_create(Interface *end_a,
     link->delay_ms       = delay;
     link->loss_rate      = loss_rate;
     link->up             = 1;
-    return link; 
+    return link;
 }
 
 void       link_free(Link *link) {
@@ -58,13 +58,13 @@ Interface *link_get_other_interface(const Link *link, const Interface *src) {
     }
 }
 
-int        link_transmit(Link *link, 
-                         const Packet *pkt, 
-                         const Interface *src,
-                         struct Scheduler *sched, 
-                         uint64_t now,
-                         EventCallback rx_handler, 
-                         void *rx_ctx) {
+int        link_transmit(Link             *link,
+                         const Packet     *pkt,
+                         const Interface  *src,
+                         struct Scheduler *sched,
+                         uint64_t          now,
+                         EventCallback     rx_handler,
+                         void             *rx_ctx) {
     if (!link || !pkt || !src || !sched) {
         return -1;
     }

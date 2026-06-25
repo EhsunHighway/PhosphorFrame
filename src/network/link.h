@@ -36,11 +36,11 @@ typedef struct Link {
     complete behaviors;
     disjoint behaviors;
 */
-Link      *link_create(Interface *end_a, 
-                       Interface *end_b, 
-                       uint32_t bw, 
-                       uint32_t delay, 
-                       float loss_rate);
+Link      *link_create(Interface *end_a,
+                       Interface *end_b,
+                       uint32_t   bw,
+                       uint32_t   delay,
+                       float      loss_rate);
 
 /*@
     requires link == \null || \valid(link);
@@ -114,13 +114,13 @@ Interface *link_get_other_interface(const Link *link, const Interface *src);
         ensures \result == 1 || \result == -1;
     complete behaviors;
 */
-int        link_transmit(Link *link, 
-                         const Packet *pkt, 
-                         const Interface *src,
-                         struct Scheduler *sched, 
-                         uint64_t now,
-                         EventCallback rx_handler, 
-                         void *rx_ctx);
+int        link_transmit(Link             *link,
+                         const Packet     *pkt,
+                         const Interface  *src,
+                         struct Scheduler *sched,
+                         uint64_t          now,
+                         EventCallback     rx_handler,
+                         void             *rx_ctx);
 
 
 #endif // LINK_H

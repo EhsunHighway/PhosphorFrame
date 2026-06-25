@@ -79,7 +79,9 @@ static int icmp_send_error(Simulator *sim,
     return res;
 }
 
-int        icmp_receive(Interface *iface, Packet *pkt, void *ctx) {
+int        icmp_receive(Interface *iface,
+                        Packet    *pkt,
+                        void      *ctx) {
     Simulator *sim = (Simulator *)ctx;
     if (!iface) {
         return -1;
@@ -202,7 +204,9 @@ int        icmp_send_echo_request(Simulator      *sim,
     return res;
 }
 
-int        icmp_send_echo_reply(Simulator *sim, Interface *iface, Packet *req_pkt) {
+int        icmp_send_echo_reply(Simulator *sim,
+                                Interface *iface,
+                                Packet    *req_pkt) {
     if (!sim || !iface || !req_pkt) {
         return -1;
     }
@@ -299,26 +303,69 @@ uint16_t   icmp_checksum(const void *data, size_t len) {
     return ns_htons((uint16_t)~sum);
 }
 
-int      icmp_send_time_exceeded(Simulator *sim, Interface *iface, Packet *orig_pkt) {
-    return icmp_send_error(sim, iface, orig_pkt, ICMP_TIME_EXCEEDED, ICMP_CODE_TTL_EXCEEDED, 0);
+int      icmp_send_time_exceeded(Simulator *sim,
+                                 Interface *iface,
+                                 Packet    *orig_pkt) {
+    return icmp_send_error(sim,
+                           iface,
+                           orig_pkt,
+                           ICMP_TIME_EXCEEDED,
+                           ICMP_CODE_TTL_EXCEEDED,
+                           0);
 }
 
-int      icmp_send_unreach_net(Simulator *sim, Interface *iface, Packet *orig_pkt) {
-    return icmp_send_error(sim, iface, orig_pkt, ICMP_DEST_UNREACH, ICMP_CODE_NET_UNREACH, 0);
+int      icmp_send_unreach_net(Simulator *sim,
+                               Interface *iface,
+                               Packet    *orig_pkt) {
+    return icmp_send_error(sim,
+                           iface,
+                           orig_pkt,
+                           ICMP_DEST_UNREACH,
+                           ICMP_CODE_NET_UNREACH,
+                           0);
 }
 
-int      icmp_send_unreach_host(Simulator *sim, Interface *iface, Packet *orig_pkt) {
-    return icmp_send_error(sim, iface, orig_pkt, ICMP_DEST_UNREACH, ICMP_CODE_HOST_UNREACH, 0);
+int      icmp_send_unreach_host(Simulator *sim,
+                                Interface *iface,
+                                Packet    *orig_pkt) {
+    return icmp_send_error(sim,
+                           iface,
+                           orig_pkt,
+                           ICMP_DEST_UNREACH,
+                           ICMP_CODE_HOST_UNREACH,
+                           0);
 }
 
-int      icmp_send_unreach_proto(Simulator *sim, Interface *iface, Packet *orig_pkt) {
-    return icmp_send_error(sim, iface, orig_pkt, ICMP_DEST_UNREACH, ICMP_CODE_PROTO_UNREACH, 0);
+int      icmp_send_unreach_proto(Simulator *sim,
+                                 Interface *iface,
+                                 Packet    *orig_pkt) {
+    return icmp_send_error(sim,
+                           iface,
+                           orig_pkt,
+                           ICMP_DEST_UNREACH,
+                           ICMP_CODE_PROTO_UNREACH,
+                           0);
 }
 
-int     icmp_send_unreach_port(Simulator *sim, Interface *iface, Packet *orig_pkt) {
-    return icmp_send_error(sim, iface, orig_pkt, ICMP_DEST_UNREACH, ICMP_CODE_PORT_UNREACH, 0);
+int     icmp_send_unreach_port(Simulator *sim,
+                               Interface *iface,
+                               Packet    *orig_pkt) {
+    return icmp_send_error(sim,
+                           iface,
+                           orig_pkt,
+                           ICMP_DEST_UNREACH,
+                           ICMP_CODE_PORT_UNREACH,
+                           0);
 }
 
-int     icmp_send_frag_needed(Simulator *sim, Interface *iface, Packet *orig_pkt, uint16_t next_hop_mtu) {
-    return icmp_send_error(sim, iface, orig_pkt, ICMP_DEST_UNREACH, ICMP_CODE_FRAG_NEEDED, next_hop_mtu);
+int     icmp_send_frag_needed(Simulator *sim,
+                              Interface *iface,
+                              Packet    *orig_pkt,
+                              uint16_t   next_hop_mtu) {
+    return icmp_send_error(sim,
+                           iface,
+                           orig_pkt,
+                           ICMP_DEST_UNREACH,
+                           ICMP_CODE_FRAG_NEEDED,
+                           next_hop_mtu);
 }

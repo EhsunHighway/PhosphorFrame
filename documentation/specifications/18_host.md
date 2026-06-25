@@ -1,179 +1,427 @@
 # Module 18 - Host
 
 **Files:** `src/network/host.c`, `src/network/host.h`
-**Status:** Ready for implementation
-**Depends on:** `device`, `interface`, `arp_cache`, `arp`, `ip`, `icmp`, `udp`, `tcp`, `simulator`
+**Status:** Implemented endpoint composition module
+**Depends on:** `device`, `interface`, `packet`, `ethernet`, `arp_cache`,
+`arp`, `ip`, `icmp`, `udp`, `tcp`, `simulator`
 
 ## Concepts First
 
-This file is an implementation specification. It must explain the concepts
-before it lists functions. Host is mostly glue code, so vague words are
-dangerous: a wrong interpretation of ownership or context wiring changes the
-whole stack.
+Host is mostly glue code, so the concepts matter more than the number of lines
+in the module.
 
-For this module:
+A Host is one endpoint machine in the simulator. It owns the state needed by
+one endpoint:
 
-- **Host** means one endpoint machine in the simulator.
-- **Per-host state** means state that belongs to one Host object, not to the
-  whole simulator.
-- **IP dispatch table** means the table inside one `IpStack` that maps an IPv4
-  protocol number to a receive handler and a context pointer.
-- **Handler** means a function pointer that IP remembers and calls later when a
-  matching packet arrives.
-- **Context** means the `void *` value IP stores beside a handler and passes
-  back to that handler later.
-- **Registering a handler** means writing one entry in the IP dispatch table. It
-  does not mean calling the handler during registration.
+- a base `Device`
+- an interface array through that base device
+- one ARP cache
+- one IP stack
+- one UDP socket table
+- one TCP connection table
+- UDP and TCP context objects used by IP dispatch
+- an optional default gateway address
 
-The key words `MUST`, `MUST NOT`, `SHOULD`, and `MAY` are used with their normal
-specification meaning: `MUST` is required, `MUST NOT` is forbidden, `SHOULD` is
-the default unless there is a documented reason, and `MAY` is optional.
+Host is not a switch and not a router. It does not forward packets between
+interfaces.
+
+### Per-Host Protocol State
+
+Per-host state means state that belongs to one Host object, not to the whole
+simulator.
+
+This matters because multiple hosts can use the same protocol values at the
+same time:
+
+```text
+host A can bind UDP port 520
+host B can also bind UDP port 520
+
+host A can listen on TCP port 80
+host B can also listen on TCP port 80
+```
+
+That works only if each Host owns a separate `UdpState` and `TcpTable`.
+
+### Context Pointer
+
+The IP stack stores handlers in a protocol dispatch table.
+
+Each protocol table entry has:
+
+- a protocol number, such as `IPPROTO_UDP`
+- a handler function, such as `udp_receive`
+- an opaque context pointer, stored as `void *`
+
+Opaque means IP stores the pointer and passes it back later, but IP does not
+inspect what it points to.
+
+For UDP, the context pointer is this Host's `UdpContext`.
+
+For TCP, the context pointer is this Host's `TcpContext`.
+
+For ICMP, the context pointer is the simulator pointer.
+
+### Registering A Protocol Handler
+
+Registering a protocol handler means writing one entry in the Host-owned
+`IpStack` dispatch table.
+
+It does not call the handler immediately.
+
+Later, when `ip_receive` accepts an IPv4 packet and sees the protocol byte, IP
+uses that table entry to call the right receive function with the stored
+context pointer.
+
+```text
+IPv4 protocol 1  -> icmp_receive(..., sim)
+IPv4 protocol 17 -> udp_receive(..., host->udp_context)
+IPv4 protocol 6  -> tcp_receive(..., host->tcp_context)
+```
+
+### Empty ARP Cache
+
+An empty ARP cache is not a NULL pointer.
+
+An empty ARP cache is a valid `ArpCache` object whose learned-entry count and
+pending-packet count are zero, with all valid bits cleared.
+
+Host must use `arp_cache_init` to create this state. Host owns the storage; the
+ARP cache module owns the initialization rule.
+
+### Gateway Boundary
+
+Host stores `gateway_ip`, but current packet output still goes through
+`ip_output`.
+
+Current `ip_output` only sends to destinations reachable on the same subnet as
+the selected source interface. Gateway routing is future routing/IP-output
+work, not Host-level Ethernet bypass work.
 
 ## Purpose
 
-A Host turns the lower network pieces into one usable endpoint:
+The Host module creates and wires one endpoint.
 
-- it owns a `Device` base so it can have interfaces and links
-- it owns one ARP cache for its interfaces
-- it owns one IP stack for receiving IPv4 packets
-- it owns one UDP state table
-- it owns one TCP connection table
-- it stores an optional default gateway address for future routing work
+It provides:
 
-A Host is not a switch and not a router. It MUST NOT forward packets between
-interfaces. It sends packets created by local protocols and receives packets
-addressed to one of its local interfaces.
+- Host allocation and release
+- embedded Device initialization
+- Host-owned ARP cache allocation and initialization
+- Host-owned IP stack allocation and initialization
+- UDP/TCP state allocation and initialization
+- UDP/TCP dispatch context allocation
+- ICMP/UDP/TCP registration with this Host's IP stack
+- interface addition with ARP cache and IP receive binding
+- Host-level receive wrapper for tests
+- Host-level IP send wrapper
+
+It does not:
+
+- implement ARP packet logic
+- parse IPv4, ICMP, UDP, or TCP headers
+- choose Ethernet destination MAC addresses directly
+- perform packet forwarding
+- implement gateway routing
+- allocate or own the simulator
 
 ## Architecture Boundary
 
-Host owns and connects state. It does not implement protocol internals.
-
 | Responsibility | Owner |
 | --- | --- |
-| Interface list and interface ownership | `Device` embedded in `Host` |
-| Neighbor cache and pending ARP packets | Host-owned `ArpCache` |
+| Interface list | embedded `Device` |
+| Interface objects after successful add | Host through `Device` |
+| ARP cache storage | Host |
+| ARP cache initialization rules | ARP cache module |
 | IPv4 receive dispatch table | Host-owned `IpStack` |
-| ICMP packet parsing and ICMP replies | ICMP module |
-| UDP socket table | Host-owned `UdpState`, used by UDP module |
-| TCP connection table | Host-owned `TcpTable`, used by TCP module |
-| Choosing outgoing interface and resolving ARP | IP/ARP output path |
-| Ethernet destination MAC choice | IP/ARP/Ethernet path, not Host |
-| Packet forwarding between interfaces | Router, not Host |
+| ICMP parsing and replies | ICMP module |
+| UDP socket table storage | Host-owned `UdpState` |
+| UDP receive dispatch | UDP module using `UdpContext` |
+| TCP connection table storage | Host-owned `TcpTable` |
+| TCP receive dispatch | TCP module using `TcpContext` |
+| Outgoing interface choice | IP output |
+| ARP resolution and pending queue | ARP/IP path |
+| Gateway route decision | future routing/IP output |
 
-Host MAY call module initialization and registration functions. Host MUST NOT
-inspect UDP sockets, TCP TCBs, IPv4 wire headers, or ARP packet contents except
-through the public APIs of those modules.
+Host may call public initialization and registration APIs. Host must not reach
+inside protocol internals when a public API exists.
 
-## State Model
+## Data Model
 
-`Host` MUST embed `Device` as its first field. This allows code that already
-works with `Device *` to use a `Host *` through its first field when connecting
-interfaces and links.
+### Constants
 
-This specification follows the current `host.h` storage model: protocol state
-members are pointers. A successful `host_create` MUST leave these pointers
-non-null and pointing to Host-owned storage:
+```c
+#define HOST_MAX_PORTS 8
+```
 
-| Host state | Required successful state |
+`HOST_MAX_PORTS` is the capacity of the embedded Device interface array created
+by `host_create`.
+
+### `Host`
+
+```c
+typedef struct Host {
+    Device      base;
+
+    Simulator  *sim;
+
+    ArpCache   *arp_cache;
+    IpStack    *ip_stack;
+
+    UdpState   *udp_state;
+    UdpContext *udp_context;
+
+    TcpTable   *tcp_table;
+    TcpContext *tcp_context;
+
+    uint32_t   gateway_ip;
+} Host;
+```
+
+`base` is the embedded Device. It is the first field.
+
+Current storage model:
+
+| Field | Ownership |
 | --- | --- |
-| `sim` | Borrowed pointer equal to the `sim` argument. Host does not free it. |
-| `arp_cache` | Host-owned cache object. It is not `NULL`. |
-| `ip_stack` | Host-owned IP stack object. It is not `NULL`. |
-| `udp_state` | Host-owned UDP state table. It is not `NULL`. |
-| `udp_context` | Host-owned UDP context. It is not `NULL`. |
-| `tcp_table` | Host-owned TCP connection table. It is not `NULL`. |
-| `tcp_context` | Host-owned TCP context. It is not `NULL`. |
-| `gateway_ip` | Host-order IPv4 address. `0` means no gateway configured. |
+| `base` | embedded in Host |
+| `base.interfaces` | allocated and freed by Host |
+| `base.interfaces[i]` | owned by Host after successful `host_add_interface` |
+| `sim` | borrowed; Host does not free it |
+| `arp_cache` | allocated and freed by Host |
+| `ip_stack` | allocated and freed by Host |
+| `udp_state` | allocated and freed by Host |
+| `udp_context` | allocated and freed by Host |
+| `tcp_table` | allocated and freed by Host |
+| `tcp_context` | allocated and freed by Host |
+| `gateway_ip` | host-order IPv4 address; `0` means none |
 
-If the implementation later changes these fields from pointers to embedded
-objects, the specification and ACSL contracts MUST be updated at the same time.
-Do not mix pointer-style code with embedded-object contracts.
+### Required Successful Creation State
+
+After successful `host_create`:
+
+| State | Required value |
+| --- | --- |
+| `host->sim` | equal to input `sim` |
+| `host->base.iface_count` | `0` |
+| `host->base.iface_max` | `8` |
+| `host->base.interfaces` | non-NULL |
+| `host->arp_cache` | non-NULL and initialized by `arp_cache_init` |
+| `host->ip_stack` | non-NULL and initialized by `ip_stack_init` |
+| `host->udp_state` | non-NULL and initialized by `udp_init` |
+| `host->tcp_table` | non-NULL and initialized by `tcp_init` |
+| `host->udp_context` | non-NULL, points to `sim` and `udp_state` |
+| `host->tcp_context` | non-NULL, points to `sim` and `tcp_table` |
+| `host->gateway_ip` | equal to input `gateway_ip` |
 
 ### ARP Cache Initial State
 
-The phrase "initialize the ARP cache as empty" MUST NOT appear in code review as
-an unresolved interpretation. For this module it means the following exact
-state.
+`arp_cache_init(host->arp_cache)` must produce:
 
-| ARP cache part | Required value after successful `host_create` |
-| --- | --- |
-| `host->arp_cache` | non-null Host-owned `ArpCache *` |
-| `host->arp_cache->count` | `0` |
-| `host->arp_cache->entries[i].valid` for `0 <= i < 256` | `0` |
-| `host->arp_cache->pending_count` | `0` |
-| `host->arp_cache->pending[i].valid` for `0 <= i < 32` | `0` |
+- `count == 0`
+- `pending_count == 0`
+- every learned entry has `valid == 0`
+- every pending entry has `valid == 0`
+- pending packet/interface pointers are cleared by the ARP cache initializer
 
-An empty ARP cache is a valid cache with no learned entries and no queued
-pending packets. A `NULL` ARP cache is not empty; it is missing. If Host cannot
-create this state, `host_create` MUST fail and return `NULL`.
+Host must not treat `NULL` as empty.
 
-`arp_cache_init` is the public API that produces this state. Host owns the cache
-storage, but ARP cache owns the initialization rule. Host creation MUST use that
-public initializer instead of manually reaching into every ARP cache field.
+### UDP And TCP Initial State
 
-### IP Stack Initial State
+Host allocates `udp_state` and then calls:
 
-The Host IP stack initial state is:
+```c
+udp_init(host->udp_state);
+```
 
-- the IP stack object exists
-- it is not `NULL` after successful `host_create`
-- its simulator pointer is the `sim` argument
-- every protocol entry starts with no handler and no context
+After that call:
 
-After protocol registration, the dispatch table contains the ICMP, UDP, and TCP
-entries described below.
-
-### UDP State Initial State
-
-The Host creates its UDP state by allocating `host->udp_state` and then calling
-`udp_init(host->udp_state)`.
-
-After that initializer call:
-
-- `host->udp_state` is not `NULL`
 - `host->udp_state->count == 0`
 - every UDP socket slot has `valid == 0`
 
-This is per Host. Two Hosts may both bind UDP port 520 because they have
-different `UdpState` objects.
+Host allocates `tcp_table` and then calls:
 
-### TCP Table Initial State
+```c
+tcp_init(host->tcp_table);
+```
 
-The Host creates its TCP table by allocating `host->tcp_table` and then calling
-`tcp_init(host->tcp_table)`.
+After that call:
 
-After that initializer call:
-
-- `host->tcp_table` is not `NULL`
 - `host->tcp_table->count == 0`
 - every TCB slot has `valid == 0`
 
-This is per Host. A connection on one Host MUST NOT appear in another Host's
-TCP table.
+## Ownership And Lifetime
 
-### UDP And TCP Contexts
+`host_create` owns every pointer allocation it stores in `Host`, except the
+borrowed `Simulator *`.
 
-`IpStack` stores one `void *ctx` beside each registered handler. IP does not
-know what that pointer means. The receiving protocol knows.
+If any creation step fails, `host_create` calls `host_free` on the partially
+created Host and returns `NULL`.
 
-For UDP:
+`host_add_interface` transfers interface ownership only on success.
 
-- `udp_context` MUST identify the same simulator passed to `host_create`
-- `udp_context` MUST identify this Host's `udp_state`
-- IP stores `udp_context` beside `udp_receive`
-- later, `udp_receive` receives that context and uses it to find this Host's UDP
-  socket table
+On successful `host_add_interface`, `host_free` will free the interface.
 
-For TCP:
+On failed `host_add_interface`, the caller still owns the interface.
 
-- `tcp_context` MUST identify the same simulator passed to `host_create`
-- `tcp_context` MUST identify this Host's `tcp_table`
-- IP stores `tcp_context` beside `tcp_receive`
-- later, `tcp_receive` receives that context and uses it to find this Host's TCP
-  connection table
+`host_receive` consumes a non-IPv4 packet by freeing it. For IPv4, ownership is
+delegated to `ip_receive`.
 
-The context objects are not extra UDP sockets or extra TCP connections. They are
-the bridge between generic IP dispatch and Host-owned protocol state.
+`host_send_ip` does not free payload on Host-level validation failure. For valid
+input, ownership follows `ip_output`:
+
+- if `ip_output` returns success after sending or enqueueing, IP/ARP/lower
+  layers own the payload
+- if `ip_output` fails before transfer, the caller still owns the payload
+
+Current `ip_output` can fail before transfer when no source interface exists,
+the interface is down, the ARP cache is missing, or the destination is
+off-subnet.
+
+## Public API
+
+```c
+Host *host_create(const char *name,
+                  Simulator  *sim,
+                  uint32_t    gateway_ip);
+
+void host_free(Host *host);
+
+int host_add_interface(Host *host, Interface *iface);
+
+int host_receive(Host      *host,
+                 Interface *iface,
+                 Packet    *pkt,
+                 uint16_t   ethertype);
+
+int host_send_ip(Host     *host,
+                 uint32_t  src_ip,
+                 uint32_t  dst_ip,
+                 uint8_t   protocol,
+                 Packet   *payload);
+```
+
+Host must not duplicate UDP or TCP packet construction. UDP and TCP have their
+own send APIs.
+
+## Function Behavior
+
+### `host_create`
+
+Required behavior:
+
+- If `name == NULL || sim == NULL`, return `NULL`.
+- Allocate and zero one Host.
+- Copy the name into `host->base.name` with termination.
+- Store borrowed simulator pointer in `host->sim`.
+- Set `host->base.iface_max = HOST_MAX_PORTS`.
+- Allocate `host->base.interfaces` with capacity `HOST_MAX_PORTS`.
+- Set `host->base.iface_count = 0`.
+- Allocate `host->arp_cache`.
+- Call `arp_cache_init(host->arp_cache)`.
+- Allocate `host->ip_stack`.
+- Call `ip_stack_init(host->ip_stack, sim)`.
+- Allocate `host->udp_state`.
+- Call `udp_init(host->udp_state)`.
+- Allocate `host->tcp_table`.
+- Call `tcp_init(host->tcp_table)`.
+- Allocate `host->udp_context`.
+- Set `host->udp_context->sim = sim`.
+- Set `host->udp_context->state = host->udp_state`.
+- Allocate `host->tcp_context`.
+- Set `host->tcp_context->sim = sim`.
+- Set `host->tcp_context->table = host->tcp_table`.
+- Register protocol handlers in this Host's IP stack:
+
+| Protocol | Handler | Context |
+| --- | --- | --- |
+| `IPPROTO_ICMP` | `icmp_receive` | `sim` |
+| `IPPROTO_UDP` | `udp_receive` | `host->udp_context` |
+| `IPPROTO_TCP` | `tcp_receive` | `host->tcp_context` |
+
+- Store `host->gateway_ip = gateway_ip`.
+- Return the Host.
+
+If any allocation or registration fails, release all Host-owned state already
+created and return `NULL`.
+
+### `host_free`
+
+Required behavior:
+
+- If `host == NULL`, return.
+- For each interface pointer stored in `host->base.interfaces[0 ..
+  iface_count - 1]`, call `interface_free`.
+- Free `host->base.interfaces`.
+- Free `host->arp_cache`.
+- Free `host->ip_stack`.
+- Free `host->udp_state`.
+- Free `host->tcp_table`.
+- Free `host->udp_context`.
+- Free `host->tcp_context`.
+- Free the Host.
+
+Cleanup must match the pointer storage model in `host.h`.
+
+### `host_add_interface`
+
+Required behavior:
+
+- If `host == NULL`, return `-1`.
+- If `iface == NULL`, return `-1`.
+- If `host->ip_stack == NULL`, return `-1`.
+- If `host->arp_cache == NULL`, return `-1`.
+- If the embedded Device interface array is full, return `-1`.
+- Call `device_add_interface(&host->base, iface)`.
+- If `device_add_interface` fails, return `-1`.
+- Call `interface_set_arp_cache(iface, host->arp_cache)`.
+- Call `ip_stack_bind_interface(host->ip_stack, iface)`.
+- Return `0`.
+
+Current implementation does not roll back `device_add_interface` if
+`ip_stack_bind_interface` were to fail. The current `ip_stack_bind_interface`
+fails only on NULL input, and Host checks those inputs first.
+
+### `host_receive`
+
+Required behavior:
+
+- If `host == NULL`, return `-1`.
+- If `iface == NULL`, return `-1`.
+- If `pkt == NULL`, return `-1`.
+- If `host->ip_stack == NULL`, return `-1`.
+- If `ethertype != ETHERTYPE_IPV4`, free `pkt` and return `-1`.
+- For IPv4, call:
+
+```c
+ip_receive(iface, pkt, ethertype, host->ip_stack);
+```
+
+- Return the result from `ip_receive`.
+
+"Deliver the packet to this Host's IP receive path" means call `ip_receive`
+with this Host's `ip_stack` as the opaque context. Host does not parse IPv4 or
+upper-layer protocol headers in this function.
+
+### `host_send_ip`
+
+Required behavior:
+
+- If `host == NULL`, return `-1`.
+- If `host->sim == NULL`, return `-1`.
+- If `payload == NULL`, return `-1`.
+- If `src_ip == 0 || dst_ip == 0`, return `-1`.
+- Call:
+
+```c
+ip_output(host->sim, src_ip, dst_ip, protocol, payload);
+```
+
+- Return the result from `ip_output`.
+
+`src_ip` and `dst_ip` are host-order IPv4 addresses.
+
+Host must not choose the outgoing interface, perform ARP lookup, or build
+Ethernet frames itself.
 
 ## Flow Charts
 
@@ -182,479 +430,323 @@ the bridge between generic IP dispatch and Host-owned protocol state.
 ```text
 host_create(name, sim, gateway_ip)
   |
-  +-- reject NULL name or NULL sim
-  |
-  +-- allocate Host and clear it
-  |
-  +-- initialize embedded Device fields
-  |
-  +-- create Host-owned ARP cache and initialize it with arp_cache_init:
-      count 0, pending_count 0,
-      all entry valid bits 0,
-      all pending valid bits 0
-  |
-  +-- create Host-owned IpStack:
-      simulator pointer is sim,
-      all protocol handlers and contexts initially null
-  |
-  +-- allocate Host-owned UdpState and call udp_init(host->udp_state):
-      after the call, count is 0 and all socket valid bits are 0
-  |
-  +-- allocate Host-owned TcpTable and call tcp_init(host->tcp_table):
-      after the call, count is 0 and all TCB valid bits are 0
-  |
-  +-- create UDP context:
-      simulator is sim,
-      state is this Host's UdpState
-  |
-  +-- create TCP context:
-      simulator is sim,
-      table is this Host's TcpTable
-  |
-  +-- register ICMP, UDP, TCP handlers in this Host's IpStack
-  |
+  +-- reject NULL name or simulator
+  +-- allocate and zero Host
+  +-- initialize embedded Device capacity
+  +-- allocate interface array
+  +-- allocate ARP cache
+  +-- arp_cache_init
+  +-- allocate IP stack
+  +-- ip_stack_init
+  +-- allocate UDP state
+  +-- udp_init
+  +-- allocate TCP table
+  +-- tcp_init
+  +-- allocate UDP context -> sim + udp_state
+  +-- allocate TCP context -> sim + tcp_table
+  +-- register ICMP, UDP, TCP with IP stack
   +-- store gateway_ip
-  |
   +-- return Host
 ```
-
-If any allocation or registration step fails, Host creation MUST release
-everything already created and return `NULL`.
 
 ### Receive Path
 
 ```text
-Ethernet frame arrives
+host_receive(host, iface, pkt, ethertype)
   |
-  v
-Interface receive handler
+  +-- reject NULL inputs
   |
-  v
-ip_receive using this Host's IpStack
+  +-- ethertype != IPv4:
+  |     free pkt
+  |     return -1
   |
-  +-- protocol == IPPROTO_ICMP -> icmp_receive(ctx = simulator)
-  |
-  +-- protocol == IPPROTO_UDP  -> udp_receive(ctx = this Host's UDP context)
-  |
-  +-- protocol == IPPROTO_TCP  -> tcp_receive(ctx = this Host's TCP context)
+  +-- IPv4:
+        ip_receive(iface, pkt, ethertype, host->ip_stack)
 ```
 
-The handler registration happens during `host_create`; the handler call happens
-later during receive. These are different events.
+### Protocol Dispatch After IP Receive
+
+```text
+ip_receive(..., host->ip_stack)
+  |
+  +-- IPPROTO_ICMP -> icmp_receive(ctx = sim)
+  +-- IPPROTO_UDP  -> udp_receive(ctx = host->udp_context)
+  +-- IPPROTO_TCP  -> tcp_receive(ctx = host->tcp_context)
+```
 
 ### Send Path
 
 ```text
-local protocol or application has L4 payload
+host_send_ip(host, src_ip, dst_ip, protocol, payload)
   |
-  v
-host_send_ip
+  +-- reject NULL host, NULL simulator, NULL payload
+  +-- reject zero source or destination IP
   |
-  v
-ip_output
-  |
-  +-- choose source interface
-  +-- check on-link reachability
-  +-- use interface ARP cache
-  +-- send now or queue pending ARP
+  +-- ip_output(host->sim, src_ip, dst_ip, protocol, payload)
+        |
+        +-- IP chooses source interface
+        +-- IP checks subnet reachability
+        +-- ARP cache hit: send IP packet
+        +-- ARP cache miss: send ARP request and enqueue pending payload
 ```
 
-Host does not choose the destination MAC address. Host does not perform ARP
-lookup by hand.
+## ACSL Contracts
 
-## Use Cases
+The contracts belong in `host.h`. Use literal bounds:
 
-### Use Case: Create A Host
-
-Preconditions:
-
-- caller provides non-null `name`
-- caller provides non-null `sim`
-
-Required result on success:
-
-- Host exists
-- embedded Device has zero interfaces and capacity `8`
-- ARP cache exists with `count == 0`, `pending_count == 0`, no valid entries,
-  and no valid pending packets
-- IP stack exists and has ICMP, UDP, and TCP dispatch entries
-- UDP state exists with bound-socket count `0` and no valid socket slots
-- TCP table exists with connection count `0` and no valid TCB slots
-- UDP context points to simulator and this Host's UDP state
-- TCP context points to simulator and this Host's TCP table
-- `gateway_ip` is stored unchanged
-
-### Use Case: Add Interface To Host
-
-Preconditions:
-
-- Host exists
-- interface exists
-- embedded Device still has capacity
-
-Required result on success:
-
-- interface is added to the embedded Device
-- interface `device` back-pointer points at the embedded Device
-- interface ARP cache pointer points at the Host-owned ARP cache
-- interface receive handler enters this Host's IP stack
-- Host interface count increases by one
-
-### Use Case: Receive UDP Packet
-
-Preconditions:
-
-- interface was added to this Host
-- IP stack has registered `IPPROTO_UDP`
-- incoming IPv4 packet has protocol byte `IPPROTO_UDP`
-
-Flow:
-
-1. Interface delivery reaches this Host's IP receive path.
-2. IP validates and strips the IPv4 header.
-3. IP looks up protocol `IPPROTO_UDP` in this Host's dispatch table.
-4. IP calls the registered UDP handler.
-5. IP passes this Host's UDP context to the handler.
-6. UDP uses that context to find this Host's UDP state table.
-
-### Use Case: Send IP Payload
-
-Preconditions:
-
-- Host exists
-- payload exists
-- source and destination IP addresses are nonzero host-order values
-
-Required behavior:
-
-- Host delegates to IP output.
-- On success, ownership follows `ip_output`.
-- On failure, caller still owns the payload unless `ip_output` documents a
-  different transfer for that path.
-
-## Public API
-
-The Host module exposes a small API:
-
-```c
-Host *host_create(const char *name, Simulator *sim, uint32_t gateway_ip);
-void  host_free(Host *host);
-
-int   host_add_interface(Host *host, Interface *iface);
-
-int   host_receive(Host *host,
-                   Interface *iface,
-                   Packet *pkt,
-                   uint16_t ethertype);
-
-int   host_send_ip(Host *host,
-                   uint32_t src_ip,
-                   uint32_t dst_ip,
-                   uint8_t protocol,
-                   Packet *payload);
-```
-
-Higher-level application helpers may be added later. Host MUST NOT duplicate
-full UDP or TCP packet construction because UDP and TCP already provide their
-own send APIs.
-
-## Byte Order Rules
-
-Use these rules consistently:
-
-- `gateway_ip` is host order
-- `host_send_ip` `src_ip` and `dst_ip` are host order
-- UDP/TCP public API IP arguments are host order
-- ARP cache lookup keys are host order in the current stack
-- `Interface.ip_addr` is network order
-- wire headers are network order
-
-Host mostly connects modules together, so it should not rewrite addresses
-unless the public API it calls requires that conversion.
-
-## Function Behavior
+- Host interface capacity: `8`
+- ARP cache entries: `256`
+- ARP pending entries: `32`
+- UDP sockets: `32`
+- TCP TCBs: `64`
 
 ### `host_create`
 
-Required behavior:
+```c
+/*@
+    behavior bad_input:
+        assumes name == \null || sim == \null;
+        assigns \nothing;
+        ensures \result == \null;
 
-- If `name` is `NULL`, return `NULL`.
-- If `sim` is `NULL`, return `NULL`.
-- Allocate and clear one Host.
-- Initialize the embedded Device fields:
-  - copy `name` into the device name buffer and terminate it
-  - allocate the interface pointer array with capacity `8`
-  - set interface count to zero
-  - set interface capacity to `8`
-- Create the Host-owned ARP cache and initialize it through `arp_cache_init`.
-  After initialization, `count == 0`, `pending_count == 0`, every entry is
-  invalid, every pending packet slot is invalid, and pending packet pointers are
-  cleared. A `NULL` cache is failure, not an empty cache.
-- Create the Host-owned IP stack and put it in the required initial state:
-  simulator pointer equal to `sim`, and no registered protocol handlers before
-  the ICMP/UDP/TCP registration step.
-- Allocate the Host-owned UDP state, then call `udp_init(host->udp_state)`.
-  After that call, `host->udp_state->count == 0` and every socket slot is
-  invalid. Host creation should not manually set those UDP fields.
-- Allocate the Host-owned TCP table, then call `tcp_init(host->tcp_table)`.
-  After that call, `host->tcp_table->count == 0` and every TCB slot is invalid.
-  Host creation should not manually set those TCP fields.
-- Create the Host-owned UDP context with simulator equal to `sim` and state
-  equal to this Host's UDP state.
-- Create the Host-owned TCP context with simulator equal to `sim` and table
-  equal to this Host's TCP table.
-- Register the three IP protocol handlers:
+    behavior valid_input:
+        assumes name != \null && sim != \null;
+        allocates \result;
+        ensures \result == \null || \valid(\result);
+        ensures \result != \null ==> \result->sim == sim;
+        ensures \result != \null ==> \result->base.iface_count == 0;
+        ensures \result != \null ==> \result->base.iface_max == 8;
+        ensures \result != \null ==> \result->base.interfaces != \null;
+        ensures \result != \null ==> \result->arp_cache != \null;
+        ensures \result != \null ==> \result->ip_stack != \null;
+        ensures \result != \null ==> \result->udp_state != \null;
+        ensures \result != \null ==> \result->udp_context != \null;
+        ensures \result != \null ==> \result->tcp_table != \null;
+        ensures \result != \null ==> \result->tcp_context != \null;
+        ensures \result != \null ==> \result->gateway_ip == gateway_ip;
 
-  | IPv4 protocol | Handler remembered by IP | Context remembered by IP |
-  | --- | --- | --- |
-  | `IPPROTO_ICMP` | `icmp_receive` | the simulator pointer |
-  | `IPPROTO_UDP` | `udp_receive` | this Host's UDP context |
-  | `IPPROTO_TCP` | `tcp_receive` | this Host's TCP context |
+    complete behaviors;
+    disjoint behaviors;
+*/
+Host *host_create(const char *name, Simulator *sim, uint32_t gateway_ip);
+```
 
-- Store `gateway_ip`.
-- Return the Host.
+Additional required proof/test property:
 
-If any allocation or registration fails, release all Host-owned storage already
-created and return `NULL`.
+- Successful creation initializes ARP cache counts and valid bits.
+- Successful creation initializes UDP count and valid bits.
+- Successful creation initializes TCP count and valid bits.
+- Successful creation registers ICMP/UDP/TCP handlers with the expected
+  contexts.
 
 ### `host_free`
 
-Required behavior:
+```c
+/*@
+    behavior null:
+        assumes host == \null;
+        assigns \nothing;
 
-- If `host` is `NULL`, return.
-- Free interfaces owned through the embedded Device, following the same
-  ownership rule as `device_free`.
-- Free the embedded Device's interface pointer array.
-- Free Host-owned ARP cache storage.
-- Free Host-owned IP stack storage.
-- Free Host-owned UDP state storage.
-- Free Host-owned UDP context storage.
-- Free Host-owned TCP table storage.
-- Free Host-owned TCP context storage.
-- Free the Host itself.
+    behavior valid:
+        assumes \valid(host);
+        frees host->base.interfaces[0 .. host->base.iface_count - 1],
+              host->tcp_context,
+              host->udp_context,
+              host->tcp_table,
+              host->udp_state,
+              host->ip_stack,
+              host->arp_cache,
+              host->base.interfaces,
+              host;
 
-Cleanup MUST match the final storage model in `host.h`. If a field is embedded,
-do not free that field separately. If a field is a Host-owned pointer, free it.
+    complete behaviors;
+    disjoint behaviors;
+*/
+void host_free(Host *host);
+```
 
 ### `host_add_interface`
 
-Required behavior:
+```c
+/*@
+    behavior bad_input:
+        assumes host == \null || iface == \null;
+        assigns \nothing;
+        ensures \result == -1;
 
-- If `host` is `NULL`, return `-1`.
-- If `iface` is `NULL`, return `-1`.
-- Add the interface to the embedded Device.
-- If the Device is full or rejects the interface, return `-1`.
-- Point the interface at the Host-owned ARP cache.
-- Bind the interface receive path to the Host-owned IP stack.
-- Return `0` on success.
+    behavior missing_state:
+        assumes \valid(host) && iface != \null;
+        assumes host->ip_stack == \null || host->arp_cache == \null;
+        assigns \nothing;
+        ensures \result == -1;
 
-The interface does not need to be administratively up when it is added. Send and
-receive paths already check interface state where it matters.
+    behavior full:
+        assumes \valid(host) && \valid(iface);
+        assumes host->ip_stack != \null && host->arp_cache != \null;
+        assumes host->base.iface_count >= host->base.iface_max;
+        assigns \nothing;
+        ensures \result == -1;
+
+    behavior added:
+        assumes \valid(host) && \valid(iface);
+        assumes host->ip_stack != \null && host->arp_cache != \null;
+        assumes host->base.iface_count < host->base.iface_max;
+        assigns host->base.interfaces[0 .. host->base.iface_count],
+                host->base.iface_count,
+                iface->device,
+                iface->arp_cache,
+                iface->rx_handler,
+                iface->handler_ctx;
+        ensures \result == 0 || \result == -1;
+        ensures \result == 0 ==>
+                host->base.iface_count == \old(host->base.iface_count) + 1;
+        ensures \result == 0 ==>
+                host->base.interfaces[\old(host->base.iface_count)] == iface;
+        ensures \result == 0 ==> iface->device == &host->base;
+        ensures \result == 0 ==> iface->arp_cache == host->arp_cache;
+
+    complete behaviors;
+    disjoint behaviors;
+*/
+int host_add_interface(Host *host, Interface *iface);
+```
 
 ### `host_receive`
 
-`host_receive` is a convenience wrapper for tests and code that wants to enter
-at the Host boundary.
+```c
+/*@
+    behavior bad_input:
+        assumes host == \null || iface == \null || pkt == \null;
+        assigns \nothing;
+        ensures \result == -1;
 
-Required behavior:
+    behavior missing_stack:
+        assumes host != \null && iface != \null && pkt != \null;
+        assumes host->ip_stack == \null;
+        assigns \nothing;
+        ensures \result == -1;
 
-- If `host`, `iface`, or `pkt` is `NULL`, return `-1`.
-- If `ethertype` is not IPv4, free `pkt` and return `-1`.
-- Deliver the packet to this Host's IP receive path.
-- Return the result from the IP receive path.
+    behavior non_ipv4:
+        assumes \valid(host) && \valid(iface) && \valid(pkt);
+        assumes host->ip_stack != \null;
+        assumes ethertype != 0x0800;
+        frees pkt;
+        ensures \result == -1;
 
-Normal link delivery may call the interface receive handler directly. That is
-still valid because `host_add_interface` binds each interface to the Host's IP
-stack.
+    behavior ipv4:
+        assumes \valid(host) && \valid(iface) && \valid(pkt);
+        assumes host->ip_stack != \null;
+        assumes ethertype == 0x0800;
+        assigns iface->rx_bytes,
+                iface->last_rx_time,
+                iface->rx_errors,
+                iface->rx_dropped,
+                pkt->data,
+                pkt->len,
+                pkt->layer;
+        ensures \result == 0 || \result == -1;
+
+    complete behaviors;
+    disjoint behaviors;
+*/
+int host_receive(Host *host, Interface *iface, Packet *pkt, uint16_t ethertype);
+```
 
 ### `host_send_ip`
 
-Required behavior:
+```c
+/*@
+    behavior bad_input:
+        assumes host == \null || payload == \null;
+        assigns \nothing;
+        ensures \result == -1;
 
-- If `host` is `NULL`, return `-1`.
-- If `payload` is `NULL`, return `-1`.
-- If `src_ip` is `0`, return `-1`.
-- If `dst_ip` is `0`, return `-1`.
-- Delegate to IP output using the Host's simulator pointer.
-- Return the result from IP output.
+    behavior missing_sim:
+        assumes host != \null && payload != \null;
+        assumes host->sim == \null;
+        assigns \nothing;
+        ensures \result == -1;
 
-Ownership follows `ip_output`:
+    behavior bad_address:
+        assumes \valid(host) && \valid(payload);
+        assumes host->sim != \null;
+        assumes src_ip == 0 || dst_ip == 0;
+        assigns \nothing;
+        ensures \result == -1;
 
-- on success, the payload is owned by IP, ARP pending state, or the lower layer
-- on failure before ownership transfer, the caller still owns the payload
+    behavior send:
+        assumes \valid(host) && \valid(payload);
+        assumes host->sim != \null;
+        assumes src_ip != 0 && dst_ip != 0;
+        assigns payload->data,
+                payload->len,
+                payload->capacity,
+                payload->layer;
+        ensures \result == 0 || \result == -1;
 
-Host MUST NOT manually choose a destination MAC address and MUST NOT perform ARP
-lookup itself.
-
-## Gateway And Routing Boundary
-
-The Host stores `gateway_ip`, but Phase 1 does not implement gateway routing in
-Host.
-
-Current `ip_output` sends only to destinations reachable on the same subnet as
-the chosen source interface. If the destination is off-subnet, `ip_output`
-returns `-1`.
-
-Future gateway support should be added by extending IP output/routing behavior,
-not by making Host manually bypass IP:
-
-- Host owns the configured gateway value.
-- IP output decides whether the next hop is the destination or the gateway.
-- ARP resolves the selected next-hop address.
-
-## ACSL Contract Requirements
-
-ACSL is part of the specification for this module. The header contracts should
-be strong enough for KLEVA/EVA to check null behavior, ownership-relevant state,
-and observable effects.
-
-Use literal numeric bounds in ACSL when the prover has trouble with macros:
-
-- use `8` for `HOST_MAX_PORTS`
-- use `256` for ARP cache entries
-- use `32` for ARP pending packets and UDP sockets
-- use `64` for TCP connection slots
-
-### `host_create` ACSL Obligations
-
-Required behaviors:
-
-- `name == \null || sim == \null` assigns nothing and returns `\null`.
-- Valid inputs either return `\null` on allocation/registration failure or
-  return a valid Host.
-- On success:
-  - `\result->sim == sim`
-  - `\result->base.iface_count == 0`
-  - `\result->base.iface_max == 8`
-  - `\result->base.interfaces != \null`
-  - `\result->arp_cache != \null`
-  - `\result->ip_stack != \null`
-  - `\result->udp_state != \null`
-  - `\result->udp_context != \null`
-  - `\result->tcp_table != \null`
-  - `\result->tcp_context != \null`
-  - `\result->gateway_ip == gateway_ip`
-
-The contract should also describe the initialized contents where KLEVA can
-reason about them:
-
-- `\result->arp_cache->count == 0`.
-- `\result->arp_cache->pending_count == 0`.
-- No ARP entry slot is valid.
-- No ARP pending slot is valid.
-- UDP bound-socket count is zero.
-- TCP connection count is zero.
-
-If proving every array slot is too heavy in the first pass, keep the count
-postconditions in the public contract and move full slot validity checks into
-targeted KLEVA tests.
-
-### `host_free` ACSL Obligations
-
-Required behaviors:
-
-- `host == \null` assigns nothing.
-- Non-null Host frees all Host-owned pointer fields and the Host itself.
-- The frees clause MUST match the actual storage model in `host.h`.
-
-If the final design uses embedded protocol objects, do not list those embedded
-objects in `frees`. If the final design uses pointer fields, list the owned
-pointer fields.
-
-### `host_add_interface` ACSL Obligations
-
-Required behaviors:
-
-- `host == \null || iface == \null` assigns nothing and returns `-1`.
-- Full Device returns `-1` and does not increment `iface_count`.
-- Success:
-  - returns `0`
-  - increments `iface_count` by one
-  - stores `iface` in the next interface slot
-  - sets `iface->device` to the embedded Device
-  - sets `iface->arp_cache` to the Host-owned ARP cache
-  - installs the Host IP receive path on the interface
-
-Because receive handler function pointers can be awkward for ACSL, the first
-contract may specify the assigned fields and simple pointer relationships. KLEVA
-tests should check the exact handler/context effects.
-
-### `host_receive` ACSL Obligations
-
-Required behaviors:
-
-- null Host/interface/packet returns `-1`.
-- non-IPv4 consumes the packet and returns `-1`.
-- IPv4 delegates to the Host IP receive path and returns that result.
-
-If packet freeing is hard to express in the public contract, keep the return
-contract in ACSL and check packet consumption with KLEVA tests.
-
-### `host_send_ip` ACSL Obligations
-
-Required behaviors:
-
-- null Host/payload returns `-1`.
-- zero source or destination address returns `-1`.
-- valid input delegates to IP output and returns its result.
-- Host does not free `payload` on validation failure.
+    complete behaviors;
+    disjoint behaviors;
+*/
+int host_send_ip(Host *host,
+                 uint32_t src_ip,
+                 uint32_t dst_ip,
+                 uint8_t protocol,
+                 Packet *payload);
+```
 
 ## KLEVA Verification Plan
 
-KLEVA tests are required for this module. They should exercise the public Host
-API and check the concrete state that the ACSL contracts either state directly
-or intentionally leave to generated tests.
+Minimum KLEVA tests:
 
-Minimum KLEVA behaviors:
+1. `host_create(NULL, sim, 0)` returns NULL.
+2. `host_create("h1", NULL, 0)` returns NULL.
+3. Valid `host_create` returns non-NULL Host-owned state pointers.
+4. Valid `host_create` sets Device interface count to `0` and capacity to `8`.
+5. Valid `host_create` initializes ARP cache count and pending count to `0`.
+6. Valid `host_create` clears every ARP learned-entry valid bit.
+7. Valid `host_create` clears every ARP pending-entry valid bit.
+8. Valid `host_create` initializes IP stack with simulator pointer.
+9. Valid `host_create` registers ICMP handler with simulator context.
+10. Valid `host_create` registers UDP handler with Host UDP context.
+11. Valid `host_create` registers TCP handler with Host TCP context.
+12. Valid `host_create` initializes UDP state count to `0`.
+13. Valid `host_create` clears every UDP socket valid bit.
+14. Valid `host_create` initializes TCP table count to `0`.
+15. Valid `host_create` clears every TCB valid bit.
+16. `host_add_interface(NULL, iface)` returns `-1`.
+17. `host_add_interface(host, NULL)` returns `-1`.
+18. Missing Host IP stack returns `-1`.
+19. Missing Host ARP cache returns `-1`.
+20. Full Host returns `-1` without incrementing count.
+21. Successful add increments interface count.
+22. Successful add stores the interface pointer.
+23. Successful add sets `iface->device`.
+24. Successful add sets `iface->arp_cache`.
+25. Successful add binds interface receive handler/context to IP stack.
+26. `host_receive` rejects NULL Host, interface, or packet.
+27. `host_receive` rejects missing Host IP stack.
+28. `host_receive` rejects non-IPv4 ethertype and frees packet.
+29. `host_receive` with IPv4 calls IP receive using Host IP stack.
+30. `host_send_ip` rejects NULL Host.
+31. `host_send_ip` rejects missing Host simulator.
+32. `host_send_ip` rejects NULL payload.
+33. `host_send_ip` rejects zero source or destination IP.
+34. Valid `host_send_ip` reaches `ip_output`.
+35. Host send path does not perform ARP lookup directly.
 
-1. `host_create(NULL, sim, 0)` returns `NULL`.
-2. `host_create("h1", NULL, 0)` returns `NULL`.
-3. Valid `host_create` returns a Host with non-null Host-owned state pointers.
-4. Valid `host_create` creates the required ARP cache initial state:
-   - `count == 0`
-   - `pending_count == 0`
-   - every entry slot has `valid == 0`
-   - every pending slot has `valid == 0`
-5. Valid `host_create` creates an initialized IP stack:
-   - stack simulator is the input simulator
-   - ICMP handler/context entry is registered
-   - UDP handler/context entry is registered
-   - TCP handler/context entry is registered
-6. Valid `host_create` allocates `udp_state` and calls `udp_init`; after that:
-   - `count == 0`
-   - every socket slot has `valid == 0`
-7. Valid `host_create` allocates `tcp_table` and calls `tcp_init`; after that:
-   - `count == 0`
-   - every TCB slot has `valid == 0`
-8. `host_add_interface(NULL, iface)` returns `-1`.
-9. `host_add_interface(host, NULL)` returns `-1`.
-10. `host_add_interface` on a full Host returns `-1` and does not change count.
-11. Successful `host_add_interface`:
-    - increments `iface_count`
-    - stores the interface pointer
-    - sets `iface->device`
-    - sets `iface->arp_cache`
-    - installs an IP receive handler and context
-12. `host_receive` rejects null inputs.
-13. `host_receive` rejects non-IPv4 ethertypes and consumes the packet.
-14. `host_send_ip` rejects null Host, null payload, zero source IP, and zero
-    destination IP.
-15. `host_send_ip` with valid inputs reaches the IP output path without Host
-    doing ARP or Ethernet work itself.
-
-Generated KLEVA wrappers should keep scenarios small. Prefer separate wrappers
-for creation, interface binding, receive rejection, and send rejection instead
-of one large test that tries to prove the whole Host lifecycle at once.
+Use small wrappers. Separate Host creation, interface binding, receive
+rejection, and send rejection instead of making one giant lifecycle proof.
 
 ## Common Mistakes
 
-- Do not treat an empty ARP cache as `NULL`.
-- Do not use one global UDP or TCP state for every Host.
+- Do not treat an empty ARP cache as NULL.
+- Do not manually initialize ARP cache fields from Host.
+- Do not use one global UDP state or TCP table for every Host.
 - Do not call ICMP, UDP, or TCP receive handlers during Host creation.
-- Do not store host-order addresses directly in wire headers.
-- Do not make Host perform Ethernet destination MAC selection.
+- Do not pass `&host->tcp_ctx`; the current field is `host->tcp_context`.
+- Do not make Host parse IPv4, UDP, TCP, or ICMP.
+- Do not make Host choose Ethernet destination MAC addresses.
 - Do not make Host forward packets like a router.
-- Do not free a payload inside `host_send_ip` when validation fails; the caller
-  still owns it.
-- Do not let `host.h`, `host.c`, ACSL contracts, and this spec use different
-  names for the same Host field.
+- Do not free payload inside `host_send_ip` on validation failure.
+- Do not let `host.h`, `host.c`, ACSL contracts, and this spec disagree about
+  pointer versus embedded storage.

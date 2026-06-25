@@ -82,7 +82,10 @@ int        switch_add_port(Switch *sw, Interface *iface);
     complete behaviors;
     disjoint behaviors;
 */
-void       switch_receive(Switch *sw, Interface *in_port, Packet *frame, uint16_t ethertype);
+void       switch_receive(Switch    *sw,
+                          Interface *in_port,
+                          Packet    *frame,
+                          uint16_t   ethertype);
 
 /*@
     behavior null:

@@ -26,13 +26,19 @@ static void mac_age_handler(const Event *e, void *ctx) {
     }
 }
 
-static void switch_rx_shim(Interface *iface, Packet *pkt, uint16_t ethertype, void *ctx) {
+static void switch_rx_shim(Interface *iface,
+                           Packet    *pkt,
+                           uint16_t   ethertype,
+                           void      *ctx) {
     Switch *sw = (Switch *)ctx;
     if (!sw || !iface || !pkt) {
         return;
     }
     
-    switch_receive(sw, iface, pkt, ethertype);
+    switch_receive(sw,
+                   iface,
+                   pkt,
+                   ethertype);
 }
 
 Switch    *switch_create(const char *name, Simulator *sim) {
@@ -94,7 +100,10 @@ int        switch_add_port(Switch *sw, Interface *iface) {
     return res;
 }
 
-void       switch_receive(Switch *sw, Interface *in_port, Packet *frame, uint16_t ethertype) {
+void       switch_receive(Switch    *sw,
+                          Interface *in_port,
+                          Packet    *frame,
+                          uint16_t   ethertype) {
     if (!sw || !in_port || !frame) {
         return;
     }
@@ -124,7 +133,8 @@ void       switch_receive(Switch *sw, Interface *in_port, Packet *frame, uint16_
         return;
     }
 
-    if (memcmp(dst_mac, ETH_BROADCAST, ETH_ALEN) == 0 || mac_table_lookup(&sw->mac_tbl, dst_mac) == NULL) {
+    if (memcmp(dst_mac, ETH_BROADCAST, ETH_ALEN) == 0 ||
+        mac_table_lookup(&sw->mac_tbl, dst_mac) == NULL) {
         /*
          * Broadcast or unknown destination MAC, flood the frame to all ports except the incoming port.
          */
@@ -133,7 +143,11 @@ void       switch_receive(Switch *sw, Interface *in_port, Packet *frame, uint16_
             if (out_port != in_port && interface_is_up(out_port) && out_port->link) {
                 Packet *pkt_clone = packet_clone(frame);
                 if (pkt_clone) {
-                    ethernet_send(sw->sim, out_port, dst_mac, ethertype, pkt_clone);
+                    ethernet_send(sw->sim,
+                                  out_port,
+                                  dst_mac,
+                                  ethertype,
+                                  pkt_clone);
                 } else {
                     in_port->rx_errors++;
                     break; 
@@ -147,7 +161,11 @@ void       switch_receive(Switch *sw, Interface *in_port, Packet *frame, uint16_
          */
         Interface *egress = mac_table_lookup(&sw->mac_tbl, dst_mac);
         if (egress && egress != in_port && interface_is_up(egress)) {
-            ethernet_send(sw->sim, egress, dst_mac, ethertype, frame);
+            ethernet_send(sw->sim,
+                          egress,
+                          dst_mac,
+                          ethertype,
+                          frame);
         } else {
             in_port->rx_dropped++;
             packet_free(frame);

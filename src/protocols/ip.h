@@ -19,7 +19,9 @@
 #define IP_MAX_PACKET_SIZE 65535    // Maximum size of an IP packet (header + payload)
 
 
-typedef int (*IpProtocolHandler)(Interface *iface, Packet *pkt, void *ctx);
+typedef int (*IpProtocolHandler)(Interface *iface,
+                                 Packet    *pkt,
+                                 void      *ctx);
 
 typedef struct IpProtocolEntry {
     IpProtocolHandler handler;
@@ -100,7 +102,10 @@ int  ip_stack_bind_interface(IpStack *stack, Interface *iface);
     complete behaviors;
     disjoint behaviors;
 */
-int  ip_stack_register_protocol(IpStack *stack, uint8_t protocol, IpProtocolHandler handler, void *ctx);
+int  ip_stack_register_protocol(IpStack           *stack,
+                                uint8_t            protocol,
+                                IpProtocolHandler  handler,
+                                void              *ctx);
 
 /*@
     behavior null:
@@ -154,7 +159,10 @@ int  ip_stack_unregister_protocol(IpStack *stack, uint8_t protocol);
     disjoint behaviors;
 */
 
-int  ip_receive(Interface *iface, Packet *frame, uint16_t ethertype, void *ctx);
+int  ip_receive(Interface *iface,
+                 Packet   *frame,
+                 uint16_t  ethertype,
+                 void     *ctx);
 
 /*@
     behavior null:
@@ -175,7 +183,13 @@ int  ip_receive(Interface *iface, Packet *frame, uint16_t ethertype, void *ctx);
     complete behaviors;
     disjoint behaviors;
 */
-int  ip_send(Simulator *sim, Interface *iface, uint8_t dst_mac[6], uint32_t src_ip, uint32_t dst_ip, uint8_t protocol, Packet *payload);
+int  ip_send(Simulator *sim,
+             Interface *iface,
+             uint8_t    dst_mac[6],
+             uint32_t   src_ip,
+             uint32_t   dst_ip,
+             uint8_t    protocol,
+             Packet    *payload);
 
 /*@
     behavior null:
@@ -199,7 +213,11 @@ int  ip_send(Simulator *sim, Interface *iface, uint8_t dst_mac[6], uint32_t src_
     complete behaviors;
     disjoint behaviors;
 */
-int  ip_output(Simulator *sim, uint32_t src_ip, uint32_t dst_ip, uint8_t protocol, Packet *payload);
+int  ip_output(Simulator *sim,
+                uint32_t  src_ip,
+                uint32_t  dst_ip,
+                uint8_t   protocol,
+                Packet   *payload);
 
 /*@
     behavior null:

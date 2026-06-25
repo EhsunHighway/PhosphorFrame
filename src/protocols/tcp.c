@@ -148,7 +148,9 @@ static Tcb *tcp_find_exact(TcpTable *table,
     return NULL;
 }
 
-static Tcb *tcp_find_listener(TcpTable *table, uint32_t local_ip, uint16_t local_port) {
+static Tcb *tcp_find_listener(TcpTable *table,
+                              uint32_t  local_ip,
+                              uint16_t  local_port) {
     if (!table) {
         return NULL;
     }
@@ -456,7 +458,9 @@ Tcb  *tcp_connect(Simulator        *sim,
     return tcb;
 }
 
-int  tcp_receive(Interface *iface, Packet *pkt, void *ctx) {
+int  tcp_receive(Interface *iface,
+                 Packet    *pkt,
+                 void      *ctx) {
     if (!iface) {
         return -1;
     }
@@ -940,7 +944,10 @@ int  tcp_receive(Interface *iface, Packet *pkt, void *ctx) {
     return -1;
 }
 
-int  tcp_send(Simulator *sim, Tcb *tcb, const uint8_t *data, size_t len) {
+int  tcp_send(Simulator     *sim,
+              Tcb           *tcb,
+              const uint8_t *data,
+              size_t         len) {
     if (!sim || !tcb) {
         return -1;
     }

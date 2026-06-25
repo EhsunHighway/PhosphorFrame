@@ -4,13 +4,13 @@
 #include "event.h"
 
 
-Event      *event_create_callback(EventType     type, 
+Event      *event_create_callback(EventType     type,
                                   uint64_t      timestamp,
-                                  void         *src, 
-                                  void         *dst, 
-                                  void         *packet, 
+                                  void         *src,
+                                  void         *dst,
+                                  void         *packet,
                                   void         *data,
-                                  EventCallback handler, 
+                                  EventCallback handler,
                                   void         *handler_ctx) {
     Event *e       = malloc(sizeof(Event));
     if (!e) {
@@ -29,19 +29,19 @@ Event      *event_create_callback(EventType     type,
     return e;
 }
 
-Event      *event_create(EventType type, 
-                         uint64_t timestamp, 
-                         void *src, 
-                         void *dst, 
-                         void *packet, 
-                         void *data) {
-    return event_create_callback(type, 
-                                 timestamp, 
-                                 src, 
-                                 dst, 
-                                 packet, 
-                                 data, 
-                                 NULL, 
+Event      *event_create(EventType  type,
+                         uint64_t   timestamp,
+                         void      *src,
+                         void      *dst,
+                         void      *packet,
+                         void      *data) {
+    return event_create_callback(type,
+                                 timestamp,
+                                 src,
+                                 dst,
+                                 packet,
+                                 data,
+                                 NULL,
                                  NULL);
 }
 
@@ -58,7 +58,7 @@ EventQueue *event_queue_create(size_t capacity) {
     if (!eq) {
         return NULL;
     }
-    
+
     Event **events = malloc(sizeof(Event *) * capacity);
     if (!events) {
         free(eq);
@@ -96,7 +96,7 @@ int         event_queue_push(EventQueue *eq, Event *e) {
         eq->events[i + 1] = eq->events[i];
         i--;
     }
-    
+
     eq->events[i + 1] = e;
     eq->count++;
     return 0;
@@ -125,4 +125,3 @@ Event      *event_queue_peek(const EventQueue *eq) {
 int         event_queue_is_empty(const EventQueue *eq) {
     return eq->count == 0;
 }
-

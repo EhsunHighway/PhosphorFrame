@@ -48,7 +48,9 @@ typedef enum TcpState {
 
 typedef struct Tcb Tcb;
 
-typedef void (*TcpRecvHandler)(Tcb *tcb, Packet *payload, void *ctx);
+typedef void (*TcpRecvHandler)(Tcb    *tcb,
+                               Packet *payload,
+                               void   *ctx);
 typedef void (*TcpConnectHandler)(Tcb *tcb, void *ctx);
 
 typedef struct TcpSegment {
@@ -258,7 +260,9 @@ int  tcp_send(Simulator     *sim,
 
     complete behaviors;
 */
-int  tcp_receive(Interface *iface, Packet *pkt, void *ctx);
+int  tcp_receive(Interface *iface,
+                 Packet    *pkt,
+                 void      *ctx);
 
 /*@
     behavior null_input:

@@ -84,12 +84,16 @@ Interface *device_get_interface_by_ip(const Device *dev, uint32_t ip_addr) {
     return NULL;
 }
 
-int        device_receive_packet(Device *dev, Interface *in_iface, Packet *pkt) {
+int        device_receive_packet(Device    *dev,
+                                 Interface *in_iface,
+                                 Packet    *pkt) {
     if (!dev || !in_iface || !pkt) return -1;
     return 0;  // stub: real logic added when protocols exist
 }
 
-int        device_send_packet(Device *dev, Interface *out_iface, Packet *pkt) {
+int        device_send_packet(Device    *dev,
+                              Interface *out_iface,
+                              Packet    *pkt) {
     if (!dev || !out_iface || !pkt) return -1;
     return 0;  // stub: real logic added when protocols exist
 }

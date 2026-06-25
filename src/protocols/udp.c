@@ -85,7 +85,7 @@ int  udp_send(Simulator     *sim,
     if (payload_len > 0) {
         memcpy(pkt->data + UDP_HDR_LEN, payload, payload_len);
     }
-    pkt->len = UDP_HDR_LEN + payload_len;
+    pkt->len   = UDP_HDR_LEN + payload_len;
     pkt->layer = 4;
     int res = ip_output(sim, src_ip, dst_ip, IPPROTO_UDP, pkt);
     if (res ==  -1) {
@@ -134,9 +134,9 @@ int  udp_receive(Interface *iface,
     uint8_t *end = pkt->head + PKT_HEADROOM + pkt->capacity;
     if ((pkt->data < pkt->head + IP_HDR_LEN) ||
         (pkt->data >= end) || (pkt->len > (size_t)(end - pkt->data))) {
-            packet_free(pkt);
-            iface->rx_errors++;
-            return -1;
+        packet_free(pkt);
+        iface->rx_errors++;
+        return -1;
     }
 
     IpHeader *ip_hdr = (IpHeader *)(pkt->data - IP_HDR_LEN);
@@ -167,14 +167,17 @@ int  udp_receive(Interface *iface,
     for (int i = 0; i < UDP_MAX_SOCKETS; i++) {
         if (udp_ctx->state->sockets[i].valid == 1 &&
             udp_ctx->state->sockets[i].port == dst_port) {
-                if (packet_strip(pkt, UDP_HDR_LEN) < 0) {
-                    packet_free(pkt);
-                    iface->rx_errors++;
-                    return -1;
-                }
-                pkt->layer = 5;
-                udp_ctx->state->sockets[i].recv_handler(src_ip, src_port, pkt, udp_ctx->state->sockets[i].ctx);
-                return 0;
+            if (packet_strip(pkt, UDP_HDR_LEN) < 0) {
+                packet_free(pkt);
+                iface->rx_errors++;
+                return -1;
+            }
+            pkt->layer = 5;
+            udp_ctx->state->sockets[i].recv_handler(src_ip,
+                                                    src_port,
+                                                    pkt,
+                                                    udp_ctx->state->sockets[i].ctx);
+            return 0;
         }
     }
     if (udp_ctx->sim) {

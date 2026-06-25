@@ -40,7 +40,10 @@ void       scheduler_free(Scheduler *s) {
 }
 
 
-void       scheduler_register(Scheduler *s, EventType type, EventHandler fn, void *ctx) {
+void       scheduler_register(Scheduler    *s,
+                              EventType     type,
+                              EventHandler  fn,
+                              void         *ctx) {
     if (!s || type < 0 || type >= EVT_TYPE_COUNT) {
         return;
     }

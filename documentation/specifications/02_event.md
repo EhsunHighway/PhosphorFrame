@@ -1,268 +1,687 @@
-# Module 02 — Event System
+# Module 02 - Event System
 
 **Files:** `src/engine/event.c`, `src/engine/event.h`
-**Status:** ✅ Implemented (92% / 81%)
-**Depends on:** packet
+**Status:** Implemented
+**Depends on:** C standard library: `stdint.h`, `stddef.h`, `stdlib.h`,
+`string.h`
 
----
+## Concepts First
 
-## The Problem
+A discrete-event simulator does not advance time continuously. It jumps from
+one scheduled event to the next scheduled event.
 
-A discrete-event simulator advances **only when something happens**.
-"Something" is an `Event`: a timestamped record of *what should be
-processed, at what virtual time, by whom*. The simulator needs:
+An `Event` is a timestamped instruction:
 
-1. A typed event record any module can produce.
-2. A priority queue that always pops the **earliest** event next.
-3. Enough dispatch information to let the scheduler run the right code
-   when the event becomes due.
-
-This module supplies the event record and the sorted queue. The scheduler
-uses the dispatch fields when it executes events.
-
-## Mental Model — Sorted Array
-
-```
-   EventQueue.events[]             (timestamp ascending)
-
-   [0]  10ms  PACKET_RECEIVE  dst = R1.eth0
-   [1]  15ms  ARP_REPLY
-   [2]  20ms  TIMER_EXPIRED
-   [3]  40ms  MAC_AGE
+```text
+At simulated time T, something should happen.
 ```
 
-`push()` inserts at the sorted position by shifting later elements.
-`pop()` returns `events[0]` and shifts the rest left. This is simple and
-deterministic for the small queues used in the project.
+Examples:
 
----
+```text
+time 100: deliver packet to interface eth1
+time 250: run TCP retransmission timer
+time 300: age switch MAC table
+time 500: send routing update
+```
 
-## Header File — `event.h`
+The event module provides two things:
 
-### Event Types — the classification key
+- the `Event` record
+- a sorted `EventQueue`
+
+The scheduler owns the main simulation loop. The event module only stores,
+orders, creates, and frees event records.
+
+### Virtual Time
+
+`timestamp` is simulated time, not wall-clock time.
+
+If the event queue contains events at times `10`, `15`, and `40`, the simulator
+can jump directly from `10` to `15` to `40`. No real sleeping is required.
+
+### Event Type Versus Callback
+
+`EventType` classifies the event:
+
+```text
+EVT_PACKET_RECEIVE
+EVT_TIMER_EXPIRED
+EVT_TCP_RETRANSMIT
+EVT_RIP_UPDATE
+```
+
+This is useful for logging, filtering, tests, and fallback dispatch.
+
+But a type alone is not always enough. There may be many TCP retransmission
+events alive at the same time, each belonging to a different TCP connection.
+That is why an event can also carry:
 
 ```c
-typedef enum {
-    EVT_PACKET_SEND,
-    EVT_PACKET_RECEIVE,   // link delivery; event usually carries ethernet callback
-    EVT_ARP_REQUEST,      // arp listens on this
-    EVT_ARP_REPLY,        // arp listens on this
-    EVT_ROUTING_UPDATE,
-    EVT_ROUTE_ADDED,
-    EVT_LINK_UP,
-    EVT_LINK_DOWN,
-    EVT_TIMER_EXPIRED,    // periodic protocols (RIP, OSPF hello)
-    EVT_RENDER,
-    EVT_RESET,
-    // L2 / MAC
-    EVT_MAC_AGE,          // switch timer; event carries Switch context
-    // Transport
-    EVT_TCP_RETRANSMIT,
-    // RIP
-    EVT_RIP_UPDATE,
-    EVT_RIP_TIMEOUT,
-    EVT_RIP_GC,
-    // OSPF
-    EVT_OSPF_HELLO,
-    EVT_OSPF_DEAD,
-    EVT_OSPF_SPF,
-    // BGP
-    EVT_BGP_KEEPALIVE,
-    EVT_BGP_HOLD,
-    EVT_BGP_CONNECT_RETRY,
-    // EIGRP
-    EVT_EIGRP_HELLO,
-    EVT_EIGRP_HOLD,
-    // IS-IS
-    EVT_ISIS_HELLO,
-    EVT_ISIS_HOLD,
-    EVT_ISIS_SPF,
-    EVT_ISIS_LSP_REGEN,
-    // NAT
-    EVT_NAT_GC,
-    EVT_TYPE_COUNT        // sentinel — must be last
-} EventType;
+EventCallback handler;
+void         *handler_ctx;
 ```
 
-`EventType` classifies the event. It is still useful for logging,
-filtering, fallback dispatch, and tests. It is not the only dispatch
-mechanism: an individual event may also carry its own callback and
-callback context.
+If `handler != NULL`, the scheduler can call that exact function with the exact
+context for this one event.
 
-This distinction matters for timers and protocol work. There may be many
-`EVT_TCP_RETRANSMIT` events alive at once, each belonging to a different
-connection. A single global context for the event type is too coarse.
-The event itself should be able to say: "when I fire, call this function
-with this owner/context."
+### Opaque Pointers
 
-### Event struct
+`Event` stores `src_device`, `dst_device`, `packet`, and `data` as `void *`.
+
+That is deliberate. `event.h` should not include every network, protocol, and
+display header. The module that creates or handles the event knows the concrete
+types and casts them back.
+
+Example:
+
+```text
+packet receive event:
+  src_device might be Interface *
+  dst_device might be Interface *
+  packet     might be Packet *
+  data       might be NULL
+```
+
+The event module does not inspect those pointers.
+
+### Sorted Array Queue
+
+The current queue is a sorted array of `Event *`.
+
+```text
+events[0]  timestamp 10
+events[1]  timestamp 15
+events[2]  timestamp 15
+events[3]  timestamp 40
+```
+
+`event_queue_push` inserts the new event at the correct position by shifting
+later events to the right.
+
+`event_queue_pop` removes `events[0]`, shifts the rest left, and returns the
+earliest event.
+
+This is `O(n)`, but simple and deterministic for this simulator.
+
+### Tie Order
+
+When two events have the same timestamp, insertion order is preserved.
+
+The implementation shifts only events with a strictly greater timestamp:
 
 ```c
-typedef struct Event Event;
+eq->events[i]->timestamp > e->timestamp
+```
+
+Equal timestamps are not shifted past each other.
+
+## Purpose
+
+The event module provides basic event allocation and a timestamp-sorted queue.
+
+It provides:
+
+- event creation
+- event creation with per-event callback/context
+- shallow event free
+- event queue creation
+- event queue destruction
+- sorted push
+- earliest-event pop
+- earliest-event peek
+- empty check
+
+It does not:
+
+- execute callbacks
+- advance scheduler time
+- own packet memory
+- own protocol-specific `data`
+- know concrete types behind `void *`
+- free events still stored inside a queue when the queue itself is freed
+
+## Architecture Boundary
+
+| Responsibility | Owner |
+| --- | --- |
+| Store timestamp and dispatch metadata | `Event` |
+| Keep events sorted by timestamp | `EventQueue` |
+| Decide when to pop and execute events | Scheduler |
+| Call `handler` or type-registered handler | Scheduler |
+| Own packet lifetime | Protocol/link/scheduler path, not `event_free` |
+| Own `data` lifetime | Event creator/handler |
+| Free queued event objects | Queue owner before or after queue destruction |
+
+`event_queue_free` frees the queue array and the queue struct. It does not walk
+the queue and free each `Event *`.
+
+## Data Model
+
+### `EventType`
+
+`EventType` is an enum of known event classes. `EVT_TYPE_COUNT` is a sentinel
+and must remain last because scheduler handler tables can use it as their size.
+
+Important groups:
+
+- packet delivery events
+- ARP events
+- link state events
+- generic timers
+- render/reset events
+- MAC aging
+- TCP retransmission
+- routing protocol timers and updates
+- NAT garbage collection
+
+### `EventCallback`
+
+```c
 typedef void (*EventCallback)(const Event *e, void *ctx);
+```
 
+The event is passed as read-only to the callback. The context pointer is opaque
+and belongs to the code that scheduled the event.
+
+### `Event`
+
+```c
 struct Event {
-    EventType type;
-    uint64_t  timestamp;     // simulated microseconds
-    void     *src_device;    // typed by event: Interface*, Device*, ...
-    void     *dst_device;    // same idea
-    void     *packet;        // Packet* — void* to avoid circular include
-    void     *data;          // protocol-specific extra payload
-    EventCallback handler;   // optional per-event callback
-    void     *handler_ctx;   // context passed to handler
+    EventType     type;
+    uint64_t      timestamp;
+    void         *src_device;
+    void         *dst_device;
+    void         *packet;
+    void         *data;
+    EventCallback handler;
+    void         *handler_ctx;
 };
 ```
 
-`src_device`, `dst_device`, `packet`, `data` are `void *` on purpose —
-event.h must not include every protocol header. Handlers cast back to
-the concrete type they expect (e.g. `(Interface *) e->dst_device`).
+Field meanings:
 
-`handler` and `handler_ctx` are also optional. If `handler != NULL`, the
-scheduler should run this exact callback for this event. If `handler ==
-NULL`, the scheduler may fall back to a registered handler for
-`e->type`.
+| Field | Meaning |
+| --- | --- |
+| `type` | Classification key for event kind. |
+| `timestamp` | Simulated time when the event should fire. |
+| `src_device` | Opaque source pointer, typed by the event creator. |
+| `dst_device` | Opaque destination pointer, typed by the event creator. |
+| `packet` | Opaque packet pointer, usually `Packet *`. |
+| `data` | Opaque extra payload or state pointer. |
+| `handler` | Optional event-specific callback. |
+| `handler_ctx` | Opaque context passed to `handler`. |
 
-### EventQueue struct
+### `EventQueue`
 
 ```c
 typedef struct EventQueue {
-    Event   **events;     // sorted pointer array, not copies
+    Event   **events;
     size_t    count;
     size_t    capacity;
 } EventQueue;
 ```
 
-### Public API
+`events` points to an allocated array of `Event *`.
 
-| Function                  | Purpose                                            |
-|---------------------------|----------------------------------------------------|
-| `event_queue_create(cap)` | Allocate empty sorted event array.                 |
-| `event_queue_push`        | Insert sorted by `timestamp`. O(n).                |
-| `event_queue_pop`         | Remove + return earliest event. O(n).              |
-| `event_queue_peek`        | Look without removing.                             |
-| `event_queue_is_empty`    | Trivial.                                           |
-| `event_create`            | Allocate + populate an Event.                      |
-| `event_create_callback`   | Allocate an Event with per-event callback/context. |
-| `event_free`              | Free Event only — **not** its `packet` or `data`.  |
+`count` is the number of occupied slots.
 
-### ACSL highlights
+`capacity` is the number of allocated slots.
 
-```
-event_queue_push:
-    \result == 0  ⇒ count == \old(count) + 1
-event_queue_pop:
-    \result != \null ⇒ count == \old(count) - 1
-event_queue_is_empty:
-    \result == 1 <==> count == 0
+The valid occupied range is:
+
+```text
+events[0 .. count - 1]
 ```
 
----
+The queue invariant is:
 
-## Call Sequence — Scheduling a packet delivery
-
-```
-link_transmit(link, pkt, src_iface, sched, now):
-   │
-   │   delay = bytes * 8 / bw_mbps + delay_ms
-   │   arrival = now + delay
-   │
-   ├─► event_create_callback(EVT_PACKET_RECEIVE, arrival,
-   │                         src_iface, dst_iface, pkt, NULL,
-   │                         ethernet_receive_event, net_ctx)
-   │       │  malloc + populate Event struct
-   │       ▼
-   │     Event *e
-   │
-   └─► scheduler_schedule(sched, e)
-           │
-           └─► event_queue_push(sched->eq, e)
-                   │  shift later events right until timestamp order holds
-                   │  insert e               O(n)
-                   │  count++
-                   ▼
-                  ok
+```text
+0 <= count <= capacity
+events[0 .. count - 1] are sorted by nondecreasing timestamp
 ```
 
-## Call Sequence — Main loop pulls events
+## Ownership And Lifetime
 
-```
-scheduler_step(sched):
-   │
-   ├─► Event *e = event_queue_pop(sched->eq)
-   │       │  events[0] is earliest
-   │       │  memmove events[1..] left
-   │       │  count--
-   │       ▼
-   │     return e
-   │
-   │   sched->now = e->timestamp              ← virtual clock advances
-   │   if e->handler != NULL
-   │       e->handler(e, e->handler_ctx)       ← per-event dispatch
-   │   else
-   │       h = sched->handlers[e->type]        ← fallback dispatch
-   │       h.fn(e, h.ctx)
-   │
-   └─► event_free(e)                          ← packet keeps its own life
-```
+`event_create` and `event_create_callback` allocate one `Event`.
 
----
+`event_free` frees only that `Event`.
 
-## Design Notes
+`event_free` does not free:
 
-- **Queue stores pointers, not values.** Inserts and pops move pointers,
-  not whole events; event addresses stay stable.
-- **`event_free` is shallow.** Handlers own packet lifetimes. Freeing the
-  packet here would double-free in most flows.
-- **Per-event callbacks are the normal owner-specific path.** A timer,
-  retransmission, or delayed packet delivery can carry the exact callback
-  and context that should handle it. This avoids one global context per
-  event type.
-- **Event type dispatch is a fallback and classification mechanism.**
-  It keeps simple events easy and keeps event names useful for tracing,
-  but it should not be the only way to route owner-specific work.
-- **Ties are FIFO by insertion.** `event_queue_push` only shifts entries
-  with a strictly greater timestamp, so equal timestamps remain in
-  original order.
-- **Capacity grows with `realloc`.** A full queue doubles its capacity on
-  push. If `realloc` fails, the event is not inserted and `count` is
-  unchanged.
+- `event->packet`
+- `event->data`
+- `event->src_device`
+- `event->dst_device`
+- `event->handler_ctx`
 
-## Implementation Guide
+`event_queue_create` allocates:
 
-1. `event_create_callback`: allocate one `Event` and copy all fields,
-   including `handler` and `handler_ctx`.
-2. `event_create`: call `event_create_callback` with `handler = NULL`
-   and `handler_ctx = NULL`. This keeps existing callers compatible.
-3. `event_queue_create`: allocate the queue and the pointer array; set
-   `count = 0` and `capacity` to the requested value.
-4. `event_queue_push`: grow if full; find insertion index from the end;
-   shift greater timestamps right; insert; increment count.
-5. `event_queue_pop`: return `NULL` on empty; otherwise save `events[0]`,
-   shift the remaining pointers left, decrement count, and return saved
-   event.
-6. `event_free`: shallow free only.
+- one `EventQueue`
+- one `Event **` array
 
-## ACSL Contract Plan
+`event_queue_free` frees the array and the queue. It does not free queued event
+objects.
 
-Useful predicates:
+The current implementation does not defend against `NULL` in
+`event_queue_push`, `event_queue_pop`, `event_queue_peek`, or
+`event_queue_is_empty`. Callers must pass a valid queue.
+
+## Public API
 
 ```c
-/*@ predicate queue_sorted{L}(EventQueue *eq) =
-      \valid(eq) &&
-      \forall integer i, j;
-        0 <= i <= j < eq->count ==>
-          eq->events[i]->timestamp <= eq->events[j]->timestamp;
+EventQueue *event_queue_create(size_t capacity);
+
+void        event_queue_free(EventQueue *eq);
+
+int         event_queue_push(EventQueue *eq, Event *e);
+
+Event      *event_queue_pop(EventQueue *eq);
+
+Event      *event_queue_peek(const EventQueue *eq);
+
+int         event_queue_is_empty(const EventQueue *eq);
+
+Event      *event_create(EventType  type,
+                         uint64_t   timestamp,
+                         void      *src,
+                         void      *dst,
+                         void      *packet,
+                         void      *data);
+
+Event      *event_create_callback(EventType     type,
+                                  uint64_t      timestamp,
+                                  void         *src,
+                                  void         *dst,
+                                  void         *packet,
+                                  void         *data,
+                                  EventCallback handler,
+                                  void         *handler_ctx);
+
+void        event_free(Event *e);
+```
+
+## Function Behavior
+
+### `event_create_callback`
+
+Required behavior:
+
+- Allocate one `Event`.
+- If allocation fails, return `NULL`.
+- Store all arguments directly into the new event.
+- Return the new event.
+
+The event module does not validate whether `type` is a known enum value.
+
+### `event_create`
+
+Required behavior:
+
+- Create an event with the same fields as `event_create_callback`.
+- Set `handler == NULL`.
+- Set `handler_ctx == NULL`.
+
+This function exists for callers that want type-based scheduler dispatch instead
+of a per-event callback.
+
+### `event_free`
+
+Required behavior:
+
+- If `e == NULL`, return immediately.
+- Free only the `Event` object.
+
+### `event_queue_create`
+
+Required behavior:
+
+- Caller should pass `capacity > 0`.
+- Allocate one `EventQueue`.
+- Allocate an array of `capacity` `Event *` slots.
+- If either allocation fails, return `NULL` and leak nothing from this call.
+- Set `count == 0`.
+- Set `capacity == capacity`.
+- Store the array pointer in `events`.
+
+The implementation currently assumes useful queues have nonzero capacity. New
+callers and tests should treat `capacity == 0` as outside the supported API.
+
+### `event_queue_free`
+
+Required behavior:
+
+- If `eq == NULL`, return immediately.
+- Free `eq->events`.
+- Free `eq`.
+- Do not free any `Event *` stored in the queue.
+
+### `event_queue_push`
+
+Required behavior:
+
+- Caller must pass a valid queue.
+- Caller must pass a valid event.
+- If `count >= capacity`, grow the `events` array with `realloc`.
+- Growth doubles the previous capacity.
+- If growth fails, return `-1` and leave `count` unchanged.
+- Insert the new event so timestamps remain sorted in nondecreasing order.
+- Preserve insertion order for events with equal timestamps.
+- Increment `count`.
+- Return `0`.
+
+The implementation stores event pointers. It does not copy `Event` objects.
+
+### `event_queue_pop`
+
+Required behavior:
+
+- Caller must pass a valid queue.
+- If `count == 0`, return `NULL`.
+- Save `events[0]`.
+- Shift remaining event pointers left by one slot.
+- Decrement `count`.
+- Return the saved earliest event.
+
+The returned event is no longer owned by the queue.
+
+### `event_queue_peek`
+
+Required behavior:
+
+- Caller must pass a valid queue.
+- If `count == 0`, return `NULL`.
+- Return `events[0]`.
+- Do not change queue state.
+
+The returned event remains stored in the queue.
+
+### `event_queue_is_empty`
+
+Required behavior:
+
+- Caller must pass a valid queue.
+- Return `1` if `count == 0`.
+- Return `0` otherwise.
+- Do not change queue state.
+
+## Flow Charts
+
+### Scheduling A Delayed Packet Delivery
+
+```text
+link computes arrival timestamp
+  |
+  +-- event_create_callback(...)
+  |     |
+  |     +-- event stores timestamp, packet, dst interface, handler, context
+  |
+  +-- scheduler_schedule(...)
+        |
+        +-- event_queue_push(...)
+              |
+              +-- insert by timestamp
+```
+
+### Scheduler Pulls The Next Event
+
+```text
+scheduler step
+  |
+  +-- event_queue_pop(queue)
+  |     |
+  |     +-- returns earliest event or NULL
+  |
+  +-- if event exists:
+        |
+        +-- scheduler time becomes event timestamp
+        |
+        +-- if event->handler exists:
+        |     call event->handler(event, event->handler_ctx)
+        |
+        +-- otherwise:
+              use scheduler's registered handler for event->type
+```
+
+### Queue Push
+
+```text
+event_queue_push(eq, e)
+  |
+  +-- if full:
+  |     |
+  |     +-- realloc to double capacity
+  |     +-- fail: return -1
+  |
+  +-- scan backward while existing timestamp > new timestamp
+  |
+  +-- shift greater timestamps right
+  |
+  +-- place new event
+  |
+  +-- count++
+  |
+  +-- return 0
+```
+
+## ACSL Contracts
+
+The contracts belong in `event.h`. The queue stores pointers, so the useful
+properties are queue shape, sortedness, count changes, and shallow ownership.
+
+### Shared Predicates
+
+```c
+/*@
+    predicate event_type_valid(EventType type) =
+        0 <= type && type < EVT_TYPE_COUNT;
+
+    predicate event_queue_storage(EventQueue *eq) =
+        \valid(eq) &&
+        eq->events != \null &&
+        0 <= eq->count &&
+        eq->count <= eq->capacity &&
+        eq->capacity > 0 &&
+        \valid(eq->events + (0 .. eq->capacity - 1));
+
+    predicate event_queue_sorted(EventQueue *eq) =
+        event_queue_storage(eq) &&
+        (\forall integer i, j;
+            0 <= i && i <= j && j < eq->count ==>
+                eq->events[i]->timestamp <= eq->events[j]->timestamp);
+
+    predicate event_queue_entries_valid(EventQueue *eq) =
+        event_queue_storage(eq) &&
+        (\forall integer i;
+            0 <= i && i < eq->count ==> \valid(eq->events[i]));
+
+    predicate event_queue_well_formed(EventQueue *eq) =
+        event_queue_sorted(eq) && event_queue_entries_valid(eq);
 */
 ```
 
-Contract targets:
+### `event_queue_create`
 
-- `event_queue_push`: success increments count, preserves
-  `queue_sorted`, and keeps the new event reachable in `events`.
-- `event_queue_pop`: non-NULL result is the old earliest event and count
-  decreases by one.
-- `event_queue_peek`: returns the old earliest event without changing
-  count.
-- `event_create_callback`: non-NULL result preserves `handler` and
-  `handler_ctx`.
-- `event_free`: frees only the `Event`, never `packet` or `data`.
+```c
+/*@
+    requires capacity > 0;
+    allocates \result;
+    ensures \result == \null || event_queue_storage(\result);
+    ensures \result != \null ==> \result->count == 0;
+    ensures \result != \null ==> \result->capacity == capacity;
+*/
+EventQueue *event_queue_create(size_t capacity);
+```
+
+### `event_queue_free`
+
+```c
+/*@
+    assigns \nothing;
+*/
+void event_queue_free(EventQueue *eq);
+```
+
+ACSL does not model the shallow free cleanly in the lightweight style used here.
+The implementation rule is: free only `eq->events` and `eq`; do not free queued
+events.
+
+### `event_queue_push`
+
+```c
+/*@
+    requires event_queue_well_formed(eq);
+    requires \valid(e);
+    assigns eq->events, eq->events[0 .. eq->capacity - 1],
+            eq->count, eq->capacity;
+    ensures \result == 0 || \result == -1;
+    ensures \result == 0 ==> eq->count == \old(eq->count) + 1;
+    ensures \result == -1 ==> eq->count == \old(eq->count);
+    ensures \result == 0 ==> event_queue_well_formed(eq);
+    ensures \result == 0 ==>
+        \exists integer i; 0 <= i && i < eq->count && eq->events[i] == e;
+*/
+int event_queue_push(EventQueue *eq, Event *e);
+```
+
+Additional required proof/test property:
+
+- If two events have equal timestamps, their relative insertion order is
+  preserved.
+- If `realloc` fails, the old `events` pointer remains the queue storage.
+
+### `event_queue_pop`
+
+```c
+/*@
+    requires event_queue_well_formed(eq);
+    assigns eq->events[0 .. eq->capacity - 1], eq->count;
+    ensures \result == \null || \valid(\result);
+    ensures \old(eq->count) == 0 ==> \result == \null;
+    ensures \old(eq->count) == 0 ==> eq->count == \old(eq->count);
+    ensures \old(eq->count) > 0 ==> \result == \old(eq->events[0]);
+    ensures \old(eq->count) > 0 ==> eq->count == \old(eq->count) - 1;
+    ensures event_queue_well_formed(eq);
+*/
+Event *event_queue_pop(EventQueue *eq);
+```
+
+### `event_queue_peek`
+
+```c
+/*@
+    requires event_queue_well_formed((EventQueue *)eq);
+    assigns \nothing;
+    ensures \result == \null || \valid_read(\result);
+    ensures eq->count == 0 ==> \result == \null;
+    ensures eq->count > 0 ==> \result == eq->events[0];
+*/
+Event *event_queue_peek(const EventQueue *eq);
+```
+
+### `event_queue_is_empty`
+
+```c
+/*@
+    requires event_queue_storage((EventQueue *)eq);
+    assigns \nothing;
+    ensures \result == 1 <==> eq->count == 0;
+*/
+int event_queue_is_empty(const EventQueue *eq);
+```
+
+### `event_create`
+
+```c
+/*@
+    allocates \result;
+    ensures \result == \null || \valid(\result);
+    ensures \result != \null ==> \result->type == type;
+    ensures \result != \null ==> \result->timestamp == timestamp;
+    ensures \result != \null ==> \result->src_device == src;
+    ensures \result != \null ==> \result->dst_device == dst;
+    ensures \result != \null ==> \result->packet == packet;
+    ensures \result != \null ==> \result->data == data;
+    ensures \result != \null ==> \result->handler == \null;
+    ensures \result != \null ==> \result->handler_ctx == \null;
+*/
+Event *event_create(EventType type,
+                    uint64_t  timestamp,
+                    void     *src,
+                    void     *dst,
+                    void     *packet,
+                    void     *data);
+```
+
+### `event_create_callback`
+
+```c
+/*@
+    allocates \result;
+    ensures \result == \null || \valid(\result);
+    ensures \result != \null ==> \result->type == type;
+    ensures \result != \null ==> \result->timestamp == timestamp;
+    ensures \result != \null ==> \result->src_device == src;
+    ensures \result != \null ==> \result->dst_device == dst;
+    ensures \result != \null ==> \result->packet == packet;
+    ensures \result != \null ==> \result->data == data;
+    ensures \result != \null ==> \result->handler == handler;
+    ensures \result != \null ==> \result->handler_ctx == handler_ctx;
+*/
+Event *event_create_callback(EventType     type,
+                             uint64_t      timestamp,
+                             void         *src,
+                             void         *dst,
+                             void         *packet,
+                             void         *data,
+                             EventCallback handler,
+                             void         *handler_ctx);
+```
+
+### `event_free`
+
+```c
+/*@
+    assigns \nothing;
+*/
+void event_free(Event *e);
+```
+
+Implementation rule: free only the event record. Do not free any opaque pointer
+stored in the event.
+
+## KLEVA Verification Plan
+
+Minimum KLEVA tests:
+
+1. `event_create` returns either `NULL` or an event with all fields copied.
+2. `event_create` sets `handler == NULL`.
+3. `event_create` sets `handler_ctx == NULL`.
+4. `event_create_callback` preserves `handler`.
+5. `event_create_callback` preserves `handler_ctx`.
+6. `event_free(NULL)` does not crash.
+7. `event_queue_create(1)` returns either `NULL` or a queue with `count == 0`.
+8. Created queue capacity equals requested capacity.
+9. Push into empty queue succeeds and increments count.
+10. Push keeps timestamps sorted.
+11. Push preserves equal-timestamp insertion order.
+12. Push grows a full queue.
+13. Push failure from `realloc` leaves `count` unchanged.
+14. Pop from empty queue returns `NULL` and leaves count unchanged.
+15. Pop from non-empty queue returns the earliest event.
+16. Pop decrements count by one.
+17. Peek from empty queue returns `NULL`.
+18. Peek from non-empty queue returns earliest event without changing count.
+19. `event_queue_is_empty` returns `1` exactly when `count == 0`.
+20. `event_queue_free(NULL)` does not crash.
+
+## Common Mistakes
+
+- Do not free `event->packet` inside `event_free`.
+- Do not free `event->data` inside `event_free`.
+- Do not assume `EventType` alone is enough for owner-specific timers.
+- Do not make `event.h` include packet, interface, TCP, RIP, or scheduler
+  headers just to type the opaque pointers.
+- Do not break FIFO order for equal timestamps.
+- Do not make `event_queue_free` silently free events unless every caller is
+  updated to transfer ownership to the queue.

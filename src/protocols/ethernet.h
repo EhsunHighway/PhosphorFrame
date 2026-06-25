@@ -67,7 +67,9 @@ int  ethernet_send(Simulator    *sim,
     complete behaviors;
     disjoint behaviors;
 */
-int  ethernet_receive(Interface *iface, Packet *frame, uint16_t *out_ethertype);
+int  ethernet_receive(Interface *iface,
+                      Packet    *frame,
+                      uint16_t  *out_ethertype);
 
 
 #endif /* ETHERNET_H */

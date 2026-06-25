@@ -97,7 +97,9 @@ Interface *device_get_interface_by_ip(const Device *dev, uint32_t ip_addr);
     complete behaviors;
     disjoint behaviors;
 */
-int        device_receive_packet(Device *dev, Interface *in_iface, Packet *pkt);
+int        device_receive_packet(Device    *dev,
+                                 Interface *in_iface,
+                                 Packet    *pkt);
 
 /*@
     behavior null:
@@ -111,7 +113,9 @@ int        device_receive_packet(Device *dev, Interface *in_iface, Packet *pkt);
     complete behaviors;
     disjoint behaviors;
 */
-int        device_send_packet(Device *dev, Interface *out_iface, Packet *pkt);
+int        device_send_packet(Device    *dev,
+                              Interface *out_iface,
+                              Packet    *pkt);
 
 
 #endif // DEVICE_H

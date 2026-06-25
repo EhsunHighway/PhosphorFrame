@@ -55,7 +55,9 @@ void arp_init(Simulator *sim);
     complete behaviors;
     disjoint behaviors;
 */
-int  arp_send_request(Simulator *sim, Interface *iface, uint32_t target_ip);
+int  arp_send_request(Simulator *sim,
+                      Interface *iface,
+                      uint32_t   target_ip);
 
 
 /*@
@@ -73,6 +75,8 @@ int  arp_send_request(Simulator *sim, Interface *iface, uint32_t target_ip);
     complete behaviors;
     disjoint behaviors;
 */
-int  arp_send_reply(Simulator *sim, Interface *iface, Packet *req_pkt);
+int  arp_send_reply(Simulator *sim,
+                    Interface *iface,
+                    Packet    *req_pkt);
 
 #endif /* ARP_H */

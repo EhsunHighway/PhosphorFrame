@@ -11,7 +11,7 @@ or specifications for upcoming work, especially the CLI, display, routing, host,
 and router surfaces.
 
 ```text
-PHOSPHORFRAME :: packet view
+FRAMERUNNER :: packet view
 
 time  000042us
 path  host-01.eth0  ->  router-0.eth1
