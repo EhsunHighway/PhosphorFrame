@@ -94,10 +94,10 @@ void udp_init(UdpState *state);
 
     complete behaviors;
 */
-int  udp_bind(UdpState *state, 
-              uint16_t port, 
-              Udp_Recv_Handler recv_handler, 
-              void *ctx);
+int  udp_bind(UdpState        *state,
+              uint16_t         port,
+              Udp_Recv_Handler recv_handler,
+              void            *ctx);
 
 
 /*@
@@ -153,13 +153,13 @@ int  udp_unbind(UdpState *state, uint16_t port);
     
     complete behaviors;
 */
-int  udp_send(Simulator *sim, 
-              uint32_t src_ip, 
-              uint32_t dst_ip, 
-              uint16_t src_port, 
-              uint16_t dst_port, 
-              const uint8_t *payload, 
-              size_t payload_len);
+int  udp_send(Simulator     *sim,
+              uint32_t       src_ip,
+              uint32_t       dst_ip,
+              uint16_t       src_port,
+              uint16_t       dst_port,
+              const uint8_t *payload,
+              size_t         payload_len);
 
 
 /*@
@@ -195,7 +195,7 @@ int  udp_send(Simulator *sim,
     complete behaviors;
 */
 int  udp_receive(Interface *iface, 
-                 Packet *pkt, 
-                 void *ctx);
+                 Packet    *pkt,
+                 void      *ctx);
 
 #endif /* UDP_H */
