@@ -49,7 +49,7 @@ above it in the table. Numbers are sequential build order. Coverage targets:
 
 | #  | Module              | File(s)                     | Depends On                         | Status          | Tests (line / branch)  |
 |----|---------------------|-----------------------------|------------------------------------|-----------------|------------------------|
-| 19 | Routing table       | `routing/route_table.c/h`   | device, ip                         | ⬜ Not started  | —                      |
+| 19 | Routing table       | `routing/route_table.c/h`   | device, ip                         | ✅ Done         | —                      |
 | 20 | Router (L3)         | `network/router.c/h`        | device, arp_cache, route_table, ip | ⬜ Not started  | —                      |
 | 21 | RIP                 | `routing/rip.c/h`           | route_table, router, scheduler     | ⬜ Not started  | —                      |
 | 22 | OSPF                | `routing/ospf.c/h`          | route_table, router, scheduler     | ⬜ Not started  | —                      |
